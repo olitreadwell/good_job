@@ -124,7 +124,7 @@ module GoodJob # :nodoc:
       install_signal_handlers
 
       ActiveSupport::Notifications.instrument("cluster_start.good_job", { subprocesses: @configuration.subprocesses })
-      @configuration.subprocesses.times { spawn_subprocess }
+      @configuration.subprocess_configs.each { |config| spawn_subprocess(config) }
       # Bind the probe port only after the initial subprocesses are forked so
       # they don't inherit the listening socket. (Replacement subprocesses forked
       # later transiently inherit it, but never serve it and release it on exit.)

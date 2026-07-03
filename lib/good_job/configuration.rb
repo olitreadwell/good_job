@@ -152,14 +152,16 @@ module GoodJob
     # command boots a {GoodJob::Supervisor} that forks and supervises this many
     # {GoodJob::Subprocess}es, each running its own {GoodJob::Capsule}. Forking
     # allows the operating system to share memory pages copy-on-write.
+    #
+    # When {#queue_string} contains pipe-delimited pools (e.g.
+    # +"elephant:2|mice:2"+), the count is instead derived from the number of
+    # pools (one subprocess per pool) and any configured count is ignored.
     # @return [Integer]
     def subprocesses
-      (
-        options[:subprocesses] ||
-          rails_config[:subprocesses] ||
-          env['GOOD_JOB_SUBPROCESSES'] ||
-          0
-      ).to_i
+      pools = queue_pools
+      return pools.size if pools.size > 1
+
+      configured_subprocesses
     end
 
     # Whether GoodJob should run in cluster mode, forking and supervising
@@ -170,6 +172,27 @@ module GoodJob
       # +::Process+ must be fully qualified: inside the +GoodJob+ namespace a
       # bare +Process+ resolves to the +GoodJob::Process+ ActiveRecord model.
       subprocesses >= 1 && ::Process.respond_to?(:fork)
+    end
+
+    # One {GoodJob::Configuration} per subprocess the supervisor should fork.
+    # A pipe (+|+) in the queue configuration is a subprocess boundary: each
+    # pipe-delimited pool becomes its own subprocess whose {#queue_string} is
+    # that pool (still parsed with the usual +;+/+:+/+,+ syntax), and the count
+    # comes from the number of pools. Without a pipe, {#subprocesses} identical
+    # configurations are returned. The +|+ is never passed to the queue parser.
+    # @return [Array<GoodJob::Configuration>]
+    def subprocess_configs
+      pools = queue_pools
+      if pools.size > 1
+        if configured_subprocesses.positive?
+          GoodJob.logger.warn(
+            "GOOD_JOB_SUBPROCESSES (#{configured_subprocesses}) is ignored because GOOD_JOB_QUEUES defines #{pools.size} pipe-delimited subprocess pools."
+          )
+        end
+        pools.map { |pool| subprocess_config(pool) }
+      else
+        Array.new(subprocesses) { subprocess_config(queue_string) }
+      end
     end
 
     # Describes which queues to execute jobs from and how those queues should
@@ -470,6 +493,30 @@ module GoodJob
     end
 
     private
+
+    # The pipe-delimited subprocess pools within the queue configuration, if any.
+    # @return [Array<String>]
+    def queue_pools
+      queue_string.split('|').map(&:strip).reject(&:empty?)
+    end
+
+    # The explicitly configured subprocess count (before pipe-pool derivation).
+    # @return [Integer]
+    def configured_subprocesses
+      (
+        options[:subprocesses] ||
+          rails_config[:subprocesses] ||
+          env['GOOD_JOB_SUBPROCESSES'] ||
+          0
+      ).to_i
+    end
+
+    # Builds a per-subprocess configuration that runs the given queue pool.
+    # @param queues [String]
+    # @return [GoodJob::Configuration]
+    def subprocess_config(queues)
+      self.class.new(options.merge(queues: queues), env: env)
+    end
 
     def rails_config
       Rails.application.config.good_job

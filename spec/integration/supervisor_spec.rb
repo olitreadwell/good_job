@@ -59,6 +59,17 @@ RSpec.describe 'Cluster mode', :skip_if_java do
     end
   end
 
+  it 'forks one subprocess per pipe-delimited queue pool, each with its own queues and threads' do
+    queues_env = env.merge("GOOD_JOB_QUEUES" => "elephant:2|mice:3").except("GOOD_JOB_SUBPROCESSES", "GOOD_JOB_MAX_THREADS")
+    ShellOut.command("bundle exec good_job start", env: queues_env) do |shell|
+      wait_until(max: 30, increments_of: 0.5) do
+        expect(booted_subprocess_pids(shell.output).size).to eq(2)
+        expect(shell.output.join).to include("started scheduler with queues=elephant max_threads=2")
+        expect(shell.output.join).to include("started scheduler with queues=mice max_threads=3")
+      end
+    end
+  end
+
   it 'runs lifecycle hooks in the supervisor and in each subprocess' do
     ShellOut.command("bundle exec good_job start", env: env.merge("GOOD_JOB_TEST_LIFECYCLE_HOOKS" => "true")) do |shell|
       wait_until(max: 30, increments_of: 0.5) do

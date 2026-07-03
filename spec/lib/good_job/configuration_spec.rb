@@ -436,5 +436,43 @@ RSpec.describe GoodJob::Configuration do
         expect(configuration.cluster?).to be false
       end
     end
+
+    context 'when the queue string has pipe-delimited pools' do
+      it 'derives the count from the number of pools' do
+        configuration = described_class.new({ queues: 'elephant:2|mice:3' })
+        expect(configuration.subprocesses).to eq(2)
+      end
+
+      it 'enables cluster mode even without a configured count' do
+        allow(Process).to receive(:respond_to?).and_call_original
+        allow(Process).to receive(:respond_to?).with(:fork).and_return(true)
+        configuration = described_class.new({ queues: 'elephant|mice' })
+        expect(configuration.cluster?).to be true
+      end
+    end
+  end
+
+  describe '#subprocess_configs' do
+    it 'returns one identical configuration per subprocess for a homogeneous queue string' do
+      configuration = described_class.new({ subprocesses: 3, queues: 'default,-mailers' })
+      configs = configuration.subprocess_configs
+
+      expect(configs.size).to eq(3)
+      expect(configs.map(&:queue_string)).to all(eq('default,-mailers'))
+    end
+
+    it 'returns one configuration per pipe-delimited pool' do
+      configuration = described_class.new({ queues: 'elephant:2|mice:3' })
+
+      expect(configuration.subprocess_configs.map(&:queue_string)).to eq(['elephant:2', 'mice:3'])
+    end
+
+    it 'warns and ignores the configured count when pipe-delimited pools are given' do
+      allow(GoodJob.logger).to receive(:warn)
+      configuration = described_class.new({ subprocesses: 5, queues: 'elephant|mice' })
+
+      expect(configuration.subprocess_configs.size).to eq(2)
+      expect(GoodJob.logger).to have_received(:warn).with(/ignored/)
+    end
   end
 end
