@@ -61,15 +61,18 @@ module GoodJob # :nodoc:
 
     # The supervisor's record of a single forked subprocess: enough to monitor
     # its lifetime and re-fork a replacement from the same recipe (with backoff
-    # when it is crash-looping). +recipe+ is the {GoodJob::Configuration} the
-    # subprocess runs; +restart_count+ is the number of consecutive fast exits
-    # that led to this subprocess being forked; +readiness_reader+ is the read
-    # end of the pipe the subprocess heartbeats its readiness on.
+    # when it is crash-looping). +index+ is the subprocess's stable zero-based
+    # slot, carried to a replacement so it keeps the same identity; +recipe+ is
+    # the {GoodJob::Configuration} the subprocess runs; +restart_count+ is the
+    # number of consecutive fast exits that led to this subprocess being forked;
+    # +readiness_reader+ is the read end of the pipe the subprocess heartbeats its
+    # readiness on.
     class SubprocessHandle
-      attr_reader :pid, :recipe, :restart_count, :readiness_reader
+      attr_reader :pid, :index, :recipe, :restart_count, :readiness_reader
 
-      def initialize(pid:, recipe:, restart_count: 0, readiness_reader: nil)
+      def initialize(pid:, recipe:, index: 0, restart_count: 0, readiness_reader: nil)
         @pid = pid
+        @index = index
         @recipe = recipe
         @restart_count = restart_count
         @readiness_reader = readiness_reader
@@ -121,10 +124,11 @@ module GoodJob # :nodoc:
     # @return [void]
     def start
       @supervisor_pid = ::Process.pid
+      $PROGRAM_NAME = "good_job supervisor [#{@configuration.subprocesses} subprocesses]"
       install_signal_handlers
 
       ActiveSupport::Notifications.instrument("cluster_start.good_job", { subprocesses: @configuration.subprocesses })
-      @configuration.subprocess_configs.each { |config| spawn_subprocess(config) }
+      @configuration.subprocess_configs.each_with_index { |config, index| spawn_subprocess(config, index: index) }
       # Bind the probe port only after the initial subprocesses are forked so
       # they don't inherit the listening socket. (Replacement subprocesses forked
       # later transiently inherit it, but never serve it and release it on exit.)
@@ -199,9 +203,11 @@ module GoodJob # :nodoc:
     # the write end (see {GoodJob::Subprocess}) and the supervisor reads them from
     # the {SubprocessHandle}'s read end to answer the cluster +connected+ health check.
     # @param recipe [GoodJob::Configuration]
+    # @param index [Integer] The subprocess's stable zero-based slot, used in its
+    #   process title; a replacement is forked with the same index.
     # @param restart_count [Integer] Consecutive fast-exit count carried to the new subprocess.
     # @return [Integer] The forked process's PID.
-    def spawn_subprocess(recipe = @configuration, restart_count: 0)
+    def spawn_subprocess(recipe = @configuration, index: 0, restart_count: 0)
       GoodJob.run_lifecycle_hooks(:before_supervisor_fork)
 
       supervisor_pid = @supervisor_pid
@@ -212,7 +218,7 @@ module GoodJob # :nodoc:
       pid = fork do
         readiness_reader.close
         inherited_readers.each { |reader| reader.close unless reader.closed? }
-        GoodJob::Subprocess.new(configuration: recipe, supervisor_pid: supervisor_pid, readiness_writer: readiness_writer).run
+        GoodJob::Subprocess.new(configuration: recipe, index: index, supervisor_pid: supervisor_pid, readiness_writer: readiness_writer).run
       rescue StandardError => e
         GoodJob._on_thread_error(e)
         exit!(1)
@@ -221,7 +227,7 @@ module GoodJob # :nodoc:
       # The supervisor keeps only the read end; closing the write end lets the read
       # end see EOF when the subprocess dies.
       readiness_writer.close
-      @subprocesses[pid] = SubprocessHandle.new(pid: pid, recipe: recipe, restart_count: restart_count, readiness_reader: readiness_reader)
+      @subprocesses[pid] = SubprocessHandle.new(pid: pid, index: index, recipe: recipe, restart_count: restart_count, readiness_reader: readiness_reader)
       ActiveSupport::Notifications.instrument("cluster_spawn.good_job", { pid: pid })
       pid
     end
@@ -244,7 +250,7 @@ module GoodJob # :nodoc:
         backoff(restart_count)
         break if @stopped # a shutdown signal arrived during the backoff
 
-        spawn_subprocess(handle.recipe, restart_count: restart_count)
+        spawn_subprocess(handle.recipe, index: handle.index, restart_count: restart_count)
       end
     rescue Errno::ECHILD
       # No child processes exist yet or any longer.

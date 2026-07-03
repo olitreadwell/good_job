@@ -21,11 +21,13 @@ module GoodJob # :nodoc:
     READY_HEARTBEAT = "1"
 
     # @param configuration [GoodJob::Configuration] Configuration for this subprocess's Capsule.
+    # @param index [Integer] The subprocess's zero-based slot in the cluster, shown in its process title.
     # @param supervisor_pid [Integer] PID of the supervisor process; used to detect orphaning.
     # @param readiness_writer [IO, nil] Write end of the pipe on which the subprocess
     #   heartbeats its readiness to the supervisor; +nil+ disables heartbeating.
-    def initialize(configuration:, supervisor_pid: ::Process.ppid, readiness_writer: nil)
+    def initialize(configuration:, index: 0, supervisor_pid: ::Process.ppid, readiness_writer: nil)
       @configuration = configuration
+      @index = index
       @supervisor_pid = supervisor_pid
       @readiness_writer = readiness_writer
       @stop_subprocess = Concurrent::Event.new
@@ -37,6 +39,7 @@ module GoodJob # :nodoc:
     # the process should exit once this method returns.
     # @return [void]
     def run
+      $PROGRAM_NAME = "good_job subprocess #{@index}"
       GoodJob.run_lifecycle_hooks(:before_subprocess_boot)
 
       @capsule = GoodJob::Capsule.new(configuration: @configuration)

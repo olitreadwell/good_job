@@ -11,10 +11,11 @@ RSpec.describe GoodJob::Supervisor do
   end
 
   describe GoodJob::Supervisor::SubprocessHandle do
-    it 'stores the pid, recipe, and restart count' do
-      handle = described_class.new(pid: 123, recipe: :recipe, restart_count: 2)
+    it 'stores the pid, index, recipe, and restart count' do
+      handle = described_class.new(pid: 123, index: 1, recipe: :recipe, restart_count: 2)
 
       expect(handle.pid).to eq(123)
+      expect(handle.index).to eq(1)
       expect(handle.recipe).to eq(:recipe)
       expect(handle.restart_count).to eq(2)
     end

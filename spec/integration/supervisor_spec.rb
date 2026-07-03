@@ -33,6 +33,24 @@ RSpec.describe 'Cluster mode', :skip_if_java do
     `ps -o ppid= -p #{subprocess_pid}`.strip.to_i
   end
 
+  # @return [String] the process title (command) shown by `ps` for a PID.
+  def process_title(pid)
+    `ps -o command= -p #{pid}`.strip
+  end
+
+  it 'sets descriptive process titles for the supervisor and its subprocesses' do
+    ShellOut.command("bundle exec good_job start", env: env) do |shell|
+      pids = nil
+      wait_until(max: 30, increments_of: 0.5) do
+        pids = booted_subprocess_pids(shell.output)
+        expect(pids.size).to eq(2)
+      end
+
+      expect(process_title(pids.first)).to include("good_job subprocess")
+      expect(process_title(supervisor_pid_for(pids.first))).to include("good_job supervisor")
+    end
+  end
+
   it 'forks and boots the configured number of subprocesses' do
     ShellOut.command("bundle exec good_job start", env: env) do |shell|
       wait_until(max: 30, increments_of: 0.5) do
