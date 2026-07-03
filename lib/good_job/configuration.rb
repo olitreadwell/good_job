@@ -146,6 +146,32 @@ module GoodJob
       ).to_i
     end
 
+    # The number of subprocesses to fork when running in cluster mode. When
+    # this is +0+ (the default), GoodJob runs entirely in the current process
+    # (the historical behavior). When it is +1+ or greater, the +good_job+
+    # command boots a {GoodJob::Supervisor} that forks and supervises this many
+    # {GoodJob::Subprocess}es, each running its own {GoodJob::Capsule}. Forking
+    # allows the operating system to share memory pages copy-on-write.
+    # @return [Integer]
+    def subprocesses
+      (
+        options[:subprocesses] ||
+          rails_config[:subprocesses] ||
+          env['GOOD_JOB_SUBPROCESSES'] ||
+          0
+      ).to_i
+    end
+
+    # Whether GoodJob should run in cluster mode, forking and supervising
+    # subprocesses. Requires a positive {#subprocesses} count and a platform
+    # that supports +Process.fork+ (i.e. not JRuby or Windows).
+    # @return [Boolean]
+    def cluster?
+      # +::Process+ must be fully qualified: inside the +GoodJob+ namespace a
+      # bare +Process+ resolves to the +GoodJob::Process+ ActiveRecord model.
+      subprocesses >= 1 && ::Process.respond_to?(:fork)
+    end
+
     # Describes which queues to execute jobs from and how those queues should
     # be grouped into {Scheduler} instances. See
     # {file:README.md#optimize-queues-threads-and-processes} for more details

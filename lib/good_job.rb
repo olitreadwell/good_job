@@ -43,6 +43,8 @@ require_relative "good_job/probe_server/webrick_handler"
 require_relative "good_job/safe_state"
 require_relative "good_job/scheduler"
 require_relative "good_job/shared_executor"
+require_relative "good_job/subprocess"
+require_relative "good_job/supervisor"
 require_relative "good_job/systemd_service"
 require_relative "good_job/thread_status"
 

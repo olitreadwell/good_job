@@ -384,4 +384,57 @@ RSpec.describe GoodJob::Configuration do
       end
     end
   end
+
+  describe '#subprocesses' do
+    it 'defaults to 0' do
+      configuration = described_class.new({})
+      expect(configuration.subprocesses).to eq 0
+    end
+
+    context 'when option is given' do
+      it 'uses the option value' do
+        configuration = described_class.new({ subprocesses: 3 })
+        expect(configuration.subprocesses).to eq 3
+      end
+    end
+
+    context 'when rails config is set' do
+      it 'uses rails config value' do
+        allow(Rails.application.config).to receive(:good_job).and_return({ subprocesses: 2 })
+        configuration = described_class.new({})
+        expect(configuration.subprocesses).to eq 2
+      end
+    end
+
+    context 'when environment variable is set' do
+      it 'uses environment variable' do
+        stub_const 'ENV', ENV.to_hash.merge({ 'GOOD_JOB_SUBPROCESSES' => '4' })
+        configuration = described_class.new({})
+        expect(configuration.subprocesses).to eq 4
+      end
+    end
+  end
+
+  describe '#cluster?' do
+    it 'is false when subprocesses is 0' do
+      configuration = described_class.new({ subprocesses: 0 })
+      expect(configuration.cluster?).to be false
+    end
+
+    context 'when subprocesses is positive' do
+      it 'is true when the platform supports fork' do
+        allow(Process).to receive(:respond_to?).and_call_original
+        allow(Process).to receive(:respond_to?).with(:fork).and_return(true)
+        configuration = described_class.new({ subprocesses: 1 })
+        expect(configuration.cluster?).to be true
+      end
+
+      it 'is false when the platform does not support fork' do
+        allow(Process).to receive(:respond_to?).and_call_original
+        allow(Process).to receive(:respond_to?).with(:fork).and_return(false)
+        configuration = described_class.new({ subprocesses: 2 })
+        expect(configuration.cluster?).to be false
+      end
+    end
+  end
 end
