@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require 'concurrent/atomic/atomic_reference'
+require 'concurrent/hash'
+
 module GoodJob # :nodoc:
   #
   # A Supervisor runs GoodJob in "cluster mode": instead of executing jobs in
@@ -44,6 +47,11 @@ module GoodJob # :nodoc:
     MIN_BACKOFF_DELAY = 1
     MAX_BACKOFF_DELAY = 30
 
+    # Seconds after a subprocess's last readiness heartbeat before it is treated
+    # as disconnected by the +connected+ health check. Comfortably larger than a
+    # subprocess's heartbeat interval so an occasional missed beat doesn't flap.
+    CONNECTED_TIMEOUT = 15
+
     # Monotonic time in seconds, used for internal timeouts so a wall-clock
     # change can't skew them.
     # @return [Float]
@@ -55,15 +63,19 @@ module GoodJob # :nodoc:
     # its lifetime and re-fork a replacement from the same recipe (with backoff
     # when it is crash-looping). +recipe+ is the {GoodJob::Configuration} the
     # subprocess runs; +restart_count+ is the number of consecutive fast exits
-    # that led to this subprocess being forked.
+    # that led to this subprocess being forked; +readiness_reader+ is the read
+    # end of the pipe the subprocess heartbeats its readiness on.
     class SubprocessHandle
-      attr_reader :pid, :recipe, :restart_count
+      attr_reader :pid, :recipe, :restart_count, :readiness_reader
 
-      def initialize(pid:, recipe:, restart_count: 0)
+      def initialize(pid:, recipe:, restart_count: 0, readiness_reader: nil)
         @pid = pid
         @recipe = recipe
         @restart_count = restart_count
+        @readiness_reader = readiness_reader
         @started_at = Supervisor.monotonic
+        # Written by the supervise loop, read by the probe server thread.
+        @last_ready_at = Concurrent::AtomicReference.new(nil)
       end
 
       # Seconds since this subprocess was forked (monotonic, immune to wall-clock changes).
@@ -71,12 +83,32 @@ module GoodJob # :nodoc:
       def uptime
         Supervisor.monotonic - @started_at
       end
+
+      # Records that the subprocess reported itself ready at the given monotonic time.
+      # @param at [Float]
+      # @return [void]
+      def mark_ready(at)
+        @last_ready_at.set(at)
+      end
+
+      # Whether the subprocess has reported itself ready recently enough to be
+      # considered connected. A subprocess that stops heartbeating (hung, or lost
+      # its notifier connection) goes stale and is no longer connected.
+      # @param now [Float] the current monotonic time
+      # @param timeout [Numeric] seconds after which a readiness report is stale
+      # @return [Boolean]
+      def connected?(now, timeout)
+        last_ready_at = @last_ready_at.get
+        !last_ready_at.nil? && (now - last_ready_at) <= timeout
+      end
     end
 
     # @param configuration [GoodJob::Configuration] Configuration shared by every subprocess.
     def initialize(configuration = GoodJob.configuration)
       @configuration = configuration
-      @subprocesses = {} # pid => SubprocessHandle; only mutated from the main thread
+      # pid => SubprocessHandle. Mutated only from the main thread, but read from
+      # the probe server thread (via #started?), so it must be thread-safe.
+      @subprocesses = Concurrent::Hash.new
       @received_signals = []
       @self_pipe_reader, @self_pipe_writer = IO.pipe
       @stopped = false
@@ -93,10 +125,20 @@ module GoodJob # :nodoc:
 
       ActiveSupport::Notifications.instrument("cluster_start.good_job", { subprocesses: @configuration.subprocesses })
       @configuration.subprocesses.times { spawn_subprocess }
+      # Bind the probe port only after the initial subprocesses are forked so
+      # they don't inherit the listening socket. (Replacement subprocesses forked
+      # later transiently inherit it, but never serve it and release it on exit.)
+      start_probe_server
 
       supervise
     ensure
+      stop_probe_server
       restore_signal_handlers
+      # By now every subprocess has been reaped (and its reader closed); close any
+      # that remain defensively so no descriptor leaks. Iterate a snapshot of the
+      # keys since forget_subprocess mutates the hash.
+      remaining_pids = @subprocesses.keys
+      remaining_pids.each { |pid| forget_subprocess(pid) }
       @self_pipe_reader.close unless @self_pipe_reader.closed?
       @self_pipe_writer.close unless @self_pipe_writer.closed?
     end
@@ -104,6 +146,27 @@ module GoodJob # :nodoc:
     # @return [Boolean] Whether the supervisor is currently supervising subprocesses.
     def running?
       !@stopped && @supervisor_pid == ::Process.pid
+    end
+
+    # Whether the cluster is ready: the supervisor is running and every
+    # configured subprocess is currently alive. Used by the cluster health check.
+    # @return [Boolean]
+    def started?
+      running? && @subprocesses.size >= @configuration.subprocesses
+    end
+
+    # Whether the cluster is connected: it is {#started?} and every subprocess has
+    # recently reported itself ready (its scheduler running and notifier
+    # connected). This mirrors the single-process +connected+ health check, but
+    # aggregated across subprocesses via their readiness heartbeats. Read from the
+    # probe server thread. Used by the cluster health check.
+    # @return [Boolean]
+    def connected?
+      return false unless started?
+
+      now = Supervisor.monotonic
+      subprocesses = @subprocesses.values
+      !subprocesses.empty? && subprocesses.all? { |handle| handle.connected?(now, CONNECTED_TIMEOUT) }
     end
 
     private
@@ -131,6 +194,10 @@ module GoodJob # :nodoc:
     # fork — not just the initial batch — so the invariant they exist to maintain
     # (the supervisor holds no fork-unsafe resource, e.g. a live database
     # connection, at the instant of a fork) also holds for replacement forks.
+    #
+    # Each subprocess gets a private pipe: the child writes readiness heartbeats to
+    # the write end (see {GoodJob::Subprocess}) and the supervisor reads them from
+    # the {SubprocessHandle}'s read end to answer the cluster +connected+ health check.
     # @param recipe [GoodJob::Configuration]
     # @param restart_count [Integer] Consecutive fast-exit count carried to the new subprocess.
     # @return [Integer] The forked process's PID.
@@ -138,14 +205,23 @@ module GoodJob # :nodoc:
       GoodJob.run_lifecycle_hooks(:before_supervisor_fork)
 
       supervisor_pid = @supervisor_pid
+      readiness_reader, readiness_writer = IO.pipe
+      # Read ends of siblings' pipes are inherited by this fork; the child has no
+      # use for them and must close them so it never keeps a sibling's pipe open.
+      inherited_readers = @subprocesses.values.map(&:readiness_reader)
       pid = fork do
-        GoodJob::Subprocess.new(configuration: recipe, supervisor_pid: supervisor_pid).run
+        readiness_reader.close
+        inherited_readers.each { |reader| reader.close unless reader.closed? }
+        GoodJob::Subprocess.new(configuration: recipe, supervisor_pid: supervisor_pid, readiness_writer: readiness_writer).run
       rescue StandardError => e
         GoodJob._on_thread_error(e)
         exit!(1)
       end
 
-      @subprocesses[pid] = SubprocessHandle.new(pid: pid, recipe: recipe, restart_count: restart_count)
+      # The supervisor keeps only the read end; closing the write end lets the read
+      # end see EOF when the subprocess dies.
+      readiness_writer.close
+      @subprocesses[pid] = SubprocessHandle.new(pid: pid, recipe: recipe, restart_count: restart_count, readiness_reader: readiness_reader)
       ActiveSupport::Notifications.instrument("cluster_spawn.good_job", { pid: pid })
       pid
     end
@@ -160,7 +236,7 @@ module GoodJob # :nodoc:
         pid, status = ::Process.wait2(-1, ::Process::WNOHANG)
         break unless pid
 
-        handle = @subprocesses.delete(pid)
+        handle = forget_subprocess(pid)
         ActiveSupport::Notifications.instrument("cluster_reap.good_job", { pid: pid, status: status&.exitstatus })
         next if @stopped || handle.nil?
 
@@ -248,6 +324,18 @@ module GoodJob # :nodoc:
       end
     end
 
+    # Removes the subprocess's handle from the registry and closes the read end of
+    # its readiness pipe, so the supervisor never leaks a descriptor for a
+    # subprocess it is no longer tracking.
+    # @param pid [Integer]
+    # @return [SubprocessHandle, nil] the handle that was removed, if any.
+    def forget_subprocess(pid)
+      handle = @subprocesses.delete(pid)
+      reader = handle&.readiness_reader
+      reader.close if reader && !reader.closed?
+      handle
+    end
+
     # Blocks until every recorded subprocess has been reaped.
     # @return [void]
     def reap_all_blocking
@@ -257,7 +345,7 @@ module GoodJob # :nodoc:
         rescue Errno::ECHILD
           break
         end
-        @subprocesses.delete(pid)
+        forget_subprocess(pid)
       end
     end
 
@@ -275,7 +363,7 @@ module GoodJob # :nodoc:
         end
 
         if pid
-          @subprocesses.delete(pid)
+          forget_subprocess(pid)
         elsif Supervisor.monotonic >= deadline
           return false
         else
@@ -298,6 +386,25 @@ module GoodJob # :nodoc:
           @shutdown_timeout = 0
         end
       end
+    end
+
+    # Binds the probe/health-check port (in the supervisor process only) with a
+    # cluster-aware Rack app. No-op unless a probe port is configured.
+    # @return [void]
+    def start_probe_server
+      return unless @configuration.probe_port
+
+      @probe_server = GoodJob::ProbeServer.new(
+        port: @configuration.probe_port,
+        handler: @configuration.probe_handler,
+        app: GoodJob::ProbeServer.cluster_app(self)
+      )
+      @probe_server.start
+    end
+
+    # @return [void]
+    def stop_probe_server
+      @probe_server&.stop
     end
 
     # @return [void]
@@ -326,8 +433,44 @@ module GoodJob # :nodoc:
     # interval elapses, then drains anything buffered in the pipe.
     # @return [void]
     def wait_for_wakeup
-      IO.select([@self_pipe_reader], nil, nil, SUPERVISE_INTERVAL)
+      # Wake on a signal (self-pipe) or a subprocess readiness heartbeat, so the
+      # connected health check reflects readiness changes promptly rather than only
+      # once per poll interval.
+      readers = [@self_pipe_reader, *@subprocesses.values.filter_map(&:readiness_reader)]
+      IO.select(readers, nil, nil, SUPERVISE_INTERVAL)
       drain_self_pipe
+      refresh_readiness
+    end
+
+    # Reads each subprocess's readiness pipe (non-blocking) and records the time of
+    # any readiness heartbeat, so {#connected?} can tell which subprocesses are
+    # currently ready. Runs on the main thread; only mutates the thread-safe
+    # per-handle readiness timestamp.
+    # @return [void]
+    def refresh_readiness
+      now = Supervisor.monotonic
+      @subprocesses.each_value do |handle|
+        handle.mark_ready(now) if drain_readiness(handle.readiness_reader)
+      end
+    end
+
+    # Drains a subprocess's readiness pipe without blocking.
+    # @param reader [IO, nil]
+    # @return [Boolean] Whether a readiness heartbeat was read.
+    def drain_readiness(reader)
+      return false if reader.nil? || reader.closed?
+
+      read_any = false
+      loop do
+        reader.read_nonblock(256)
+        read_any = true
+      end
+    rescue IO::WaitReadable
+      read_any
+    rescue IOError
+      # EOF (the subprocess closed its end) or a closed pipe during shutdown; the
+      # subprocess will be reaped and its handle removed.
+      false
     end
 
     # Discards any bytes buffered in the self-pipe by signal handlers.

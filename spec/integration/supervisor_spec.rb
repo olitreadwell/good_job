@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require 'rails_helper'
+require 'net/http'
+require 'uri'
 
 # Boots a real supervisor and its subprocesses via the +good_job+ executable
 # and asserts on the structured log output. Following Puma's integration-test
@@ -64,6 +66,32 @@ RSpec.describe 'Cluster mode', :skip_if_java do
         # per subprocess at boot); before_subprocess_boot runs once per subprocess.
         expect(shell.output.join.scan('before_supervisor_fork PID=').size).to eq(2)
         expect(shell.output.join.scan('before_subprocess_boot PID=').size).to eq(2)
+      end
+    end
+  end
+
+  it 'serves cluster health checks on the probe port from the supervisor' do
+    port = 7005
+    ShellOut.command("bundle exec good_job start", env: env.merge("GOOD_JOB_PROBE_PORT" => port.to_s)) do |shell|
+      wait_until(max: 30, increments_of: 0.5) do
+        expect(booted_subprocess_pids(shell.output).size).to eq(2)
+      end
+
+      wait_until(max: 30, increments_of: 0.5) do
+        response = begin
+          Net::HTTP.get_response(URI("http://127.0.0.1:#{port}/status/started"))
+        rescue Errno::ECONNREFUSED, Errno::ECONNRESET, Net::ReadTimeout, EOFError
+          nil # probe server still binding
+        end
+        expect(response&.code).to eq("200")
+      end
+
+      expect(Net::HTTP.get_response(URI("http://127.0.0.1:#{port}/status")).code).to eq("200")
+
+      # /status/connected flips to 200 only once each subprocess has heartbeated
+      # that its scheduler is running and its notifier is connected.
+      wait_until(max: 30, increments_of: 0.5) do
+        expect(Net::HTTP.get_response(URI("http://127.0.0.1:#{port}/status/connected")).code).to eq("200")
       end
     end
   end

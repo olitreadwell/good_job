@@ -17,11 +17,17 @@ module GoodJob # :nodoc:
     # died) notices and exits.
     CHECK_INTERVAL = 5
 
+    # Byte written to the readiness pipe on each heartbeat while the subprocess is ready.
+    READY_HEARTBEAT = "1"
+
     # @param configuration [GoodJob::Configuration] Configuration for this subprocess's Capsule.
     # @param supervisor_pid [Integer] PID of the supervisor process; used to detect orphaning.
-    def initialize(configuration:, supervisor_pid: ::Process.ppid)
+    # @param readiness_writer [IO, nil] Write end of the pipe on which the subprocess
+    #   heartbeats its readiness to the supervisor; +nil+ disables heartbeating.
+    def initialize(configuration:, supervisor_pid: ::Process.ppid, readiness_writer: nil)
       @configuration = configuration
       @supervisor_pid = supervisor_pid
+      @readiness_writer = readiness_writer
       @stop_subprocess = Concurrent::Event.new
     end
 
@@ -40,6 +46,7 @@ module GoodJob # :nodoc:
       ActiveSupport::Notifications.instrument("subprocess_start.good_job", { pid: ::Process.pid })
 
       Kernel.loop do
+        report_readiness
         @stop_subprocess.wait(CHECK_INTERVAL)
         break if @stop_subprocess.set? || @capsule.shutdown? || orphaned?
       end
@@ -56,6 +63,31 @@ module GoodJob # :nodoc:
     end
 
     private
+
+    # Heartbeats a readiness byte to the supervisor when this subprocess is ready,
+    # so the supervisor can answer the cluster +connected+ health check. Skipped
+    # when there is no readiness pipe (e.g. running outside a supervisor).
+    # @return [void]
+    def report_readiness
+      return unless @readiness_writer && ready?
+
+      @readiness_writer.write_nonblock(READY_HEARTBEAT, exception: false)
+    rescue IOError
+      # The supervisor closed its end (it is shutting down); stop heartbeating.
+      @readiness_writer = nil
+    end
+
+    # Whether this subprocess is fully ready: its scheduler is running and its
+    # notifier is connected. Mirrors the single-process +connected+ health check
+    # ({GoodJob::ProbeServer::HealthcheckMiddleware}), evaluated here in the
+    # subprocess where those instances live.
+    # @return [Boolean]
+    def ready?
+      schedulers = GoodJob::Scheduler.instances
+      notifiers = GoodJob::Notifier.instances
+      schedulers.any? && schedulers.all?(&:running?) &&
+        notifiers.any? && notifiers.all?(&:connected?)
+    end
 
     # @return [void]
     def install_signal_handlers
