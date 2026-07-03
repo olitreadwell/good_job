@@ -31,7 +31,7 @@ module GoodJob # :nodoc:
     # the process should exit once this method returns.
     # @return [void]
     def run
-      before_boot
+      GoodJob.run_lifecycle_hooks(:before_subprocess_boot)
 
       @capsule = GoodJob::Capsule.new(configuration: @configuration)
       @capsule.start
@@ -56,16 +56,6 @@ module GoodJob # :nodoc:
     end
 
     private
-
-    # Re-establishes process-local resources that must not be shared across a
-    # fork. Database connections inherited from the supervisor point at sockets
-    # the parent may still be using, so they are cleared here; fresh connections
-    # are established lazily once the Capsule starts. (A later commit moves this
-    # into the built-in +before_subprocess_boot+ lifecycle hook.)
-    # @return [void]
-    def before_boot
-      ActiveRecord::Base.connection_handler.clear_all_connections!
-    end
 
     # @return [void]
     def install_signal_handlers

@@ -126,10 +126,17 @@ module GoodJob # :nodoc:
 
     # Forks a single subprocess running the given recipe (its {GoodJob::Configuration})
     # and records a {SubprocessHandle} for it. Must only be called from the main thread.
+    #
+    # The +before_supervisor_fork+ lifecycle hooks run immediately before *every*
+    # fork — not just the initial batch — so the invariant they exist to maintain
+    # (the supervisor holds no fork-unsafe resource, e.g. a live database
+    # connection, at the instant of a fork) also holds for replacement forks.
     # @param recipe [GoodJob::Configuration]
     # @param restart_count [Integer] Consecutive fast-exit count carried to the new subprocess.
     # @return [Integer] The forked process's PID.
     def spawn_subprocess(recipe = @configuration, restart_count: 0)
+      GoodJob.run_lifecycle_hooks(:before_supervisor_fork)
+
       supervisor_pid = @supervisor_pid
       pid = fork do
         GoodJob::Subprocess.new(configuration: recipe, supervisor_pid: supervisor_pid).run

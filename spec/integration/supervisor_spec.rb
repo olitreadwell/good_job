@@ -57,6 +57,17 @@ RSpec.describe 'Cluster mode', :skip_if_java do
     end
   end
 
+  it 'runs lifecycle hooks in the supervisor and in each subprocess' do
+    ShellOut.command("bundle exec good_job start", env: env.merge("GOOD_JOB_TEST_LIFECYCLE_HOOKS" => "true")) do |shell|
+      wait_until(max: 30, increments_of: 0.5) do
+        # before_supervisor_fork runs in the supervisor before every fork (so once
+        # per subprocess at boot); before_subprocess_boot runs once per subprocess.
+        expect(shell.output.join.scan('before_supervisor_fork PID=').size).to eq(2)
+        expect(shell.output.join.scan('before_subprocess_boot PID=').size).to eq(2)
+      end
+    end
+  end
+
   it 'gracefully shuts its subprocesses down when it is terminated' do
     ShellOut.command("bundle exec good_job start", env: env) do |shell|
       pids = nil
