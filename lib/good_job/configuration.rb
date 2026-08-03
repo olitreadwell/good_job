@@ -2,6 +2,8 @@
 
 require "active_support/core_ext/numeric/time"
 
+require_relative "configuration/validator"
+
 module GoodJob
   #
   # +GoodJob::Configuration+ provides normalized configuration information to
@@ -105,6 +107,12 @@ module GoodJob
       self.class.validate_execution_mode(execution_mode)
       self.class.validate_dequeue_query_sort(dequeue_query_sort)
     end
+
+    # +valid?+ checks whether the configuration is valid, e.g. whether Cron
+    # entries reference Job classes that exist. Intended to be used in a
+    # test, for example: +expect(GoodJob.configuration).to be_valid+
+    # +errors+ contains any errors from the most recent call to +valid?+.
+    delegate :valid?, :errors, to: :validator
 
     # Specifies how and where jobs should be executed. See {Adapter#initialize}
     # for more details on possible values.
@@ -224,10 +232,6 @@ module GoodJob
       else
         DEFAULT_POLL_INTERVAL
       end
-    end
-
-    def inline_execution_respects_schedule?
-      !!rails_config[:inline_execution_respects_schedule]
     end
 
     # The maximum number of future-scheduled jobs to store in memory.
@@ -488,6 +492,7 @@ module GoodJob
       Rails.env.development?
     end
 
+    # TODO: Remove :created_at and this option entirely in the next major version; :scheduled_at will become the only behavior.
     def dequeue_query_sort
       (options[:dequeue_query_sort] || rails_config[:dequeue_query_sort] || :created_at).to_sym
     end
@@ -516,6 +521,10 @@ module GoodJob
     # @return [GoodJob::Configuration]
     def subprocess_config(queues)
       self.class.new(options.merge(queues: queues), env: env)
+    end
+
+    def validator
+      @_validator ||= Validator.new(self)
     end
 
     def rails_config
