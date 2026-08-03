@@ -35,13 +35,17 @@ module GoodJob
     private
 
     def set_performance_range
-      locale = request.query_parameters["locale"]
-      @performance_range_context = locale.is_a?(String) ? { "locale" => locale } : {}
       @performance_range = GoodJob::PerformanceRange.new(params, query_string: request.query_string)
+
+      unless @performance_range.valid?
+        response.status = 422
+        return
+      end
+
       return if @performance_range.canonical_parameters?(request.query_parameters)
 
+      # Path helpers carry the locale via ApplicationController#default_url_options.
       canonical_query = @performance_range.to_params.symbolize_keys
-      canonical_query[:locale] = @performance_range_context["locale"]
       canonical_path = if action_name == "show"
                          performance_path(request.path_parameters.fetch(:id), canonical_query)
                        else

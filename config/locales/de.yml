@@ -255,6 +255,26 @@ de:
         custom_range: Benutzerdefiniert
         custom_range_hint: im Diagramm ziehen
         end_time: Endzeit
+        errors:
+          base:
+            malformed: Der übermittelte Zeitraum konnte nicht verarbeitet werden.
+          chart_end:
+            after_start: muss nach der Startzeit liegen
+            invalid: muss ein gültiges Datum und eine gültige Uhrzeit sein
+            nonexistent: existiert aufgrund einer Zeitumstellung nicht
+            repeated: wurde mehrfach übermittelt
+            required: ist erforderlich, wenn eine Startzeit angegeben ist
+          chart_range:
+            repeated: wurde mehrfach übermittelt
+            unknown: ist kein bekannter Zeitraum
+          chart_start:
+            invalid: muss ein gültiges Datum und eine gültige Uhrzeit sein
+            nonexistent: existiert aufgrund einer Zeitumstellung nicht
+            repeated: wurde mehrfach übermittelt
+            required: ist erforderlich, wenn eine Endzeit angegeben ist
+          chart_time_zone:
+            invalid: ist keine bekannte Zeitzone
+            repeated: wurde mehrfach übermittelt
         open_time_ranges: Leistungszeiträume öffnen
         quick_ranges: Schnellauswahl
         range_options:

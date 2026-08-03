@@ -14,8 +14,6 @@ RSpec.describe GoodJob::PerformanceRange do
       expect(range.key).to eq("24h")
       expect(range.start_time).to eq(Time.zone.parse("2023-12-31 12:34:56 UTC"))
       expect(range.end_time).to eq(Time.zone.parse("2024-01-01 12:34:56 UTC"))
-      expect(range.start_label).to eq("Dec 31, 12:34:56")
-      expect(range.end_label).to eq("Jan 1, 12:34:56")
       expect(range.start_local_value).to eq("2023-12-31T12:34:56")
       expect(range.end_local_value).to eq("2024-01-01T12:34:56")
       expect(range.to_params).to eq({})
@@ -136,7 +134,7 @@ RSpec.describe GoodJob::PerformanceRange do
         create_execution(job_class: "CurrentSecond", scheduled_at: scheduled_at)
 
         expect(range.end_time).to eq(Time.zone.parse("2024-01-01 12:34:57 UTC"))
-        expect(range.end_label).to eq("Jan 1, 12:34:57")
+        expect(range.end_local_value).to eq("2024-01-01T12:34:57")
         expect(range.apply(GoodJob::Execution).pluck(:job_class)).to include("CurrentSecond")
       end
     end
@@ -149,8 +147,6 @@ RSpec.describe GoodJob::PerformanceRange do
 
       expect(range.start_time).to eq(Time.zone.parse("2024-01-01 10:03:17 UTC"))
       expect(range.end_time).to eq(Time.zone.parse("2024-01-01 11:07:42 UTC"))
-      expect(range.start_label).to eq("Jan 1, 10:03:17")
-      expect(range.end_label).to eq("Jan 1, 11:07:42")
       expect(range.to_params).to eq(
         "chart_start" => "2024-01-01T10:03:17Z",
         "chart_end" => "2024-01-01T11:07:42Z"
@@ -289,8 +285,6 @@ RSpec.describe GoodJob::PerformanceRange do
         expect(range.start_time.iso8601).to eq("2024-11-03T01:15:00-04:00")
         expect(range.end_time.iso8601).to eq("2024-11-03T01:45:00-05:00")
         expect(range.end_time - range.start_time).to eq(90.minutes.to_i)
-        expect(range.start_label).to eq("Nov 3, 01:15:00 -04:00")
-        expect(range.end_label).to eq("Nov 3, 01:45:00 -05:00")
       end
     end
 
@@ -304,28 +298,6 @@ RSpec.describe GoodJob::PerformanceRange do
       expect(range.label_style).to eq("date_time")
       expect(range.chart_timestamp_label(range.start_time)).to eq("Jan 1 10:00")
       expect(range.chart_timestamp_label(range.end_time)).to eq("Jan 2 10:00")
-    end
-
-    it "includes years in long custom endpoint labels" do
-      range = described_class.new(
-        chart_start: "2004-07-01T00:00:00Z",
-        chart_end: "2024-07-01T00:00:00Z"
-      )
-
-      expect(range.start_label).to eq("Jul 1, 2004 00:00:00")
-      expect(range.end_label).to eq("Jul 1, 2024 00:00:00")
-    end
-
-    it "does not add endpoint offsets when a full-year range has equal endpoint offsets" do
-      Time.use_zone("America/New_York") do
-        range = described_class.new(
-          chart_start: "2023-01-01T00:00:00-05:00",
-          chart_end: "2024-01-01T00:00:00-05:00"
-        )
-
-        expect(range.start_label).to eq("Jan 1, 2023 00:00:00")
-        expect(range.end_label).to eq("Jan 1, 2024 00:00:00")
-      end
     end
 
     it "round-trips the native four-digit-year bounds in a non-UTC timezone" do
@@ -350,7 +322,25 @@ RSpec.describe GoodJob::PerformanceRange do
     end
 
     it "falls back to default state for non-scalar, non-finite, non-strict, extreme, and incomplete inputs" do
-      invalid_parameters = [
+      incomplete_or_absent_parameters = [
+        { chart_start: "2024-01-01T10:00:00Z" },
+        { chart_range: ["1h"] },
+        { chart_range: { value: "1h" } },
+        { chart_range: "unknown" },
+      ]
+
+      incomplete_or_absent_parameters.each do |parameters|
+        range = described_class.new(parameters)
+
+        expect(range.key).to eq("24h")
+        expect(range.to_params).to eq({})
+        expect(range).to be_default
+        expect(range.canonical_parameters?(parameters.stringify_keys)).to be(false)
+      end
+    end
+
+    it "falls back to a default window without claiming a preset identity when both endpoints are submitted but rejected" do
+      rejected_pair_parameters = [
         { chart_start: ["2024-01-01T10:00:00Z"], chart_end: "2024-01-01T11:00:00Z" },
         { chart_start: { value: "2024-01-01T10:00:00Z" }, chart_end: "2024-01-01T11:00:00Z" },
         { chart_start: 1, chart_end: "2024-01-01T11:00:00Z" },
@@ -360,17 +350,13 @@ RSpec.describe GoodJob::PerformanceRange do
         { chart_start: "0999-12-31T23:59:59Z", chart_end: "1000-01-01T00:00:01Z" },
         { chart_start: "9999-12-31T23:59:58Z", chart_end: "10000-01-01T00:00:00Z" },
         { chart_start: "not-a-time", chart_end: "2024-01-01T11:00:00Z" },
-        { chart_start: "2024-01-01T10:00:00Z" },
         { chart_start: "2024-01-01T11:00:00Z", chart_end: "2024-01-01T10:00:00Z" },
-        { chart_range: ["1h"] },
-        { chart_range: { value: "1h" } },
-        { chart_range: "unknown" },
       ]
 
-      invalid_parameters.each do |parameters|
+      rejected_pair_parameters.each do |parameters|
         range = described_class.new(parameters)
 
-        expect(range.key).to eq("24h")
+        expect(range.key).to be_nil
         expect(range.to_params).to eq({})
         expect(range).to be_default
         expect(range.canonical_parameters?(parameters.stringify_keys)).to be(false)
@@ -391,7 +377,7 @@ RSpec.describe GoodJob::PerformanceRange do
         query_string: query_string
       )
 
-      expect(range.key).to eq("24h")
+      expect(range.key).to be_nil
       expect(range.to_params).to eq({})
       expect(range).to be_default
     end
@@ -489,8 +475,10 @@ RSpec.describe GoodJob::PerformanceRange do
 
       expect(sub_minute_range.label_style).to eq("time_seconds")
       expect(sub_minute_range.chart_timestamp_label(sub_minute_range.start_time)).to eq("10:00:01")
+      expect(sub_minute_range.timestamp_intl_options).to eq(hour: "2-digit", hourCycle: "h23", minute: "2-digit", second: "2-digit")
       expect(multi_year_range.label_style).to eq("date_time_year")
       expect(multi_year_range.chart_timestamp_label(multi_year_range.start_time)).to eq("Jan 1, 2004 00:00")
+      expect(multi_year_range.timestamp_intl_options).to eq(year: "numeric", month: "short", day: "numeric", hour: "2-digit", hourCycle: "h23", minute: "2-digit")
     end
 
     it "falls back to the coarsest interval instead of raising when no candidate fits" do

@@ -255,6 +255,26 @@ zh-CN:
         custom_range: 自定义
         custom_range_hint: 在图表上拖动
         end_time: 结束时间
+        errors:
+          base:
+            malformed: 无法识别提交的时间范围。
+          chart_end:
+            after_start: 必须晚于开始时间
+            invalid: 必须是有效的日期和时间
+            nonexistent: 由于时区变更而不存在
+            repeated: 已提交多次
+            required: 指定开始时间时为必填项
+          chart_range:
+            repeated: 已提交多次
+            unknown: 不是可识别的时间范围
+          chart_start:
+            invalid: 必须是有效的日期和时间
+            nonexistent: 由于时区变更而不存在
+            repeated: 已提交多次
+            required: 指定结束时间时为必填项
+          chart_time_zone:
+            invalid: 不是可识别的时区
+            repeated: 已提交多次
         open_time_ranges: 打开性能时间范围
         quick_ranges: 快速范围
         range_options:

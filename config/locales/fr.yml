@@ -255,6 +255,26 @@ fr:
         custom_range: Personnalisé
         custom_range_hint: faire glisser sur le graphique
         end_time: Heure de fin
+        errors:
+          base:
+            malformed: La plage horaire envoyée n’a pas pu être comprise.
+          chart_end:
+            after_start: doit être postérieure à l’heure de début
+            invalid: doit être une date et une heure valides
+            nonexistent: n’existe pas en raison d’un changement d’heure
+            repeated: a été envoyé plusieurs fois
+            required: est requise lorsqu’une heure de début est indiquée
+          chart_range:
+            repeated: a été envoyé plusieurs fois
+            unknown: n’est pas une plage horaire reconnue
+          chart_start:
+            invalid: doit être une date et une heure valides
+            nonexistent: n’existe pas en raison d’un changement d’heure
+            repeated: a été envoyé plusieurs fois
+            required: est requise lorsqu’une heure de fin est indiquée
+          chart_time_zone:
+            invalid: n’est pas un fuseau horaire reconnu
+            repeated: a été envoyé plusieurs fois
         open_time_ranges: Ouvrir les plages horaires de performance
         quick_ranges: Plages rapides
         range_options:

@@ -62,7 +62,8 @@ RSpec.describe GoodJob::PerformanceController, type: :controller do
         expect(response).to have_http_status(:redirect)
         expect(query).to eq(
           "chart_start" => "2024-01-01T10:03:17-03:30",
-          "chart_end" => "2024-01-01T11:07:42-03:30"
+          "chart_end" => "2024-01-01T11:07:42-03:30",
+          "locale" => "en"
         )
 
         get :index, params: query
@@ -83,28 +84,22 @@ RSpec.describe GoodJob::PerformanceController, type: :controller do
         }
 
         page = Capybara.string(response.body)
-        form = page.find("form[data-controller='performance-range']")
         start_input = page.find("input[type='datetime-local'][name='chart_start']")
         end_input = page.find("input[type='datetime-local'][name='chart_end']")
-        start_canonical = page.find("input[type='hidden'][name='chart_start'][disabled]", visible: :all)
-        end_canonical = page.find("input[type='hidden'][name='chart_end'][disabled]", visible: :all)
         time_zone_input = page.find("input[type='hidden'][name='chart_time_zone'][disabled]", visible: :all)
 
         expect(response).to have_http_status(:ok)
-        expect(form["data-action"]).to eq("submit->performance-range#prepareSubmission")
         expect(start_input["value"]).to eq("2024-01-01T06:33:17")
         expect(end_input["value"]).to eq("2024-01-01T07:37:42")
-        expect(start_canonical["value"]).to eq("2024-01-01T06:33:17-03:30")
-        expect(end_canonical["value"]).to eq("2024-01-01T07:37:42-03:30")
         expect(time_zone_input["value"]).to be_blank
         expect(page).to have_css("#performance-range-time-zone > span:first-child", text: "Time zone:")
         expect(page).to have_css("[data-performance-range-target='timeZoneLabel']", text: "America/St_Johns")
-        expect(page).to have_link("Last 1 hour", href: performance_index_path(chart_range: "1h", locale: nil))
+        expect(page).to have_link("Last 1 hour", href: performance_index_path(chart_range: "1h", locale: "en"))
         expect(page.find("a.performance-range-reload")[:href]).to eq(
           performance_index_path(
             chart_start: "2024-01-01T06:33:17-03:30",
             chart_end: "2024-01-01T07:37:42-03:30",
-            locale: nil
+            locale: "en"
           )
         )
         expect(page.find("a.performance-range-reload")["data-turbo"]).to eq("false")
@@ -125,12 +120,13 @@ RSpec.describe GoodJob::PerformanceController, type: :controller do
         expect(response).to have_http_status(:redirect)
         expect(query).to eq(
           "chart_start" => "2024-01-01T13:33:17Z",
-          "chart_end" => "2024-01-01T14:37:42Z"
+          "chart_end" => "2024-01-01T14:37:42Z",
+          "locale" => "en"
         )
       end
     end
 
-    it "rejects nonexistent local endpoint times without redirecting twice" do
+    it "renders a validation error for nonexistent local endpoint times, still with fallback chart data" do
       Time.use_zone("America/New_York") do
         [
           { chart_start: "2024-03-10T02:30:00", chart_end: "2024-03-10T04:00:00" },
@@ -138,16 +134,17 @@ RSpec.describe GoodJob::PerformanceController, type: :controller do
         ].each do |parameters|
           get :index, params: parameters
 
-          expect(response).to have_http_status(:redirect)
-          expect(URI.parse(response.location).query).to be_nil
+          range = controller.instance_variable_get(:@performance_range)
 
-          get :index
-          expect(response).to have_http_status(:ok)
+          expect(response).to have_http_status(:unprocessable_entity)
+          expect(range).not_to be_valid
+          expect(range).to be_default
+          expect(response.body).to include("Performance")
         end
       end
     end
 
-    it "redirects unsafe range shapes and values once to a rendered default state" do
+    it "renders a validation error for unsafe range shapes and values, still with fallback chart data" do
       invalid_parameters = [
         { chart_start: ["2024-01-01T10:00:00Z"], chart_end: "2024-01-01T11:00:00Z" },
         { chart_start: { value: "2024-01-01T10:00:00Z" }, chart_end: "2024-01-01T11:00:00Z" },
@@ -166,12 +163,12 @@ RSpec.describe GoodJob::PerformanceController, type: :controller do
       invalid_parameters.each do |parameters|
         get :index, params: parameters
 
-        expect(response).to have_http_status(:redirect)
-        expect(URI.parse(response.location).query).to be_nil
+        range = controller.instance_variable_get(:@performance_range)
 
-        get :index
-
-        expect(response).to have_http_status(:ok)
+        expect(response).to have_http_status(:unprocessable_entity)
+        expect(range).not_to be_valid
+        expect(range).to be_default
+        expect(response.body).to include("Performance")
       end
     end
 
@@ -205,7 +202,8 @@ RSpec.describe GoodJob::PerformanceController, type: :controller do
       expect(response).to have_http_status(:redirect)
       expect(Rack::Utils.parse_query(URI.parse(response.location).query)).to eq(
         "chart_start" => "2024-01-01T10:03:17Z",
-        "chart_end" => "2024-01-01T12:03:17Z"
+        "chart_end" => "2024-01-01T12:03:17Z",
+        "locale" => "en"
       )
 
       get :index, params: {
@@ -214,8 +212,11 @@ RSpec.describe GoodJob::PerformanceController, type: :controller do
         chart_end: "2024-01-01T12:03:17Z",
       }
 
-      expect(response).to have_http_status(:redirect)
-      expect(Rack::Utils.parse_query(URI.parse(response.location).query)).to eq("chart_range" => "1h")
+      range = controller.instance_variable_get(:@performance_range)
+
+      expect(response).to have_http_status(:unprocessable_entity)
+      expect(range).not_to be_valid
+      expect(range.errors.messages_for(:chart_start)).to be_present
     end
 
     it "renders a long fall-DST range without truncating elapsed time" do

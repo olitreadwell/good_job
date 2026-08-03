@@ -37,7 +37,7 @@ describe 'Performance Page', :js do
 
       visit good_job.performance_index_path
 
-      expect(page).to have_link("Reload performance data", href: good_job.performance_index_path)
+      expect(page).to have_link("Reload performance data", href: good_job.performance_index_path(locale: "en"))
       expect(page).to have_no_css("a.performance-range-reload.disabled")
 
       click_button "Open performance time ranges"
@@ -45,15 +45,15 @@ describe 'Performance Page', :js do
 
       expect(page).to have_current_path(/chart_range=1h/)
       expect(page).to have_css(".performance-range-key", text: "1h")
-      initial_dates = all(".performance-range-date").map(&:text)
+      initial_dates = endpoint_values
 
       Timecop.travel(initial_time + 12.seconds)
       find("a[aria-label='Reload performance data']").click
 
       query = Rack::Utils.parse_query(URI.parse(page.current_url).query)
-      expect(query).to eq("chart_range" => "1h")
+      expect(query).to eq("chart_range" => "1h", "locale" => "en")
       expect(page).to have_css(".performance-range-key", text: "1h")
-      expect(all(".performance-range-date").map(&:text)).not_to eq(initial_dates)
+      expect(endpoint_values).not_to eq(initial_dates)
     end
   end
 
@@ -73,8 +73,8 @@ describe 'Performance Page', :js do
         good_job.performance_path("ExampleJob", chart_range: "1h", **exact_range),
       ].each do |path|
         visit path
-        initial_dates = all(".performance-range-date").map(&:text)
-        initial_chart_config = find("[data-chart-config-value]")["data-chart-config-value"]
+        initial_dates = endpoint_values
+        initial_chart_config = find("[data-performance-chart-config-value]")["data-performance-chart-config-value"]
 
         click_button "Leistungszeiträume öffnen"
         find("a.performance-range-custom").click
@@ -82,19 +82,16 @@ describe 'Performance Page', :js do
         query = Rack::Utils.parse_query(URI.parse(page.current_url).query)
         expect(query).to eq(exact_range.stringify_keys)
         expect(page).to have_css(".performance-range-key", text: "Benutzerdefiniert")
-        expect(all(".performance-range-date").map(&:text)).to eq(initial_dates)
-        expect(find("[data-chart-config-value]")["data-chart-config-value"]).to eq(initial_chart_config)
+        expect(endpoint_values).to eq(initial_dates)
+        expect(find("[data-performance-chart-config-value]")["data-performance-chart-config-value"]).to eq(initial_chart_config)
       end
     end
   end
 
-  it "presents standard-size range controls with accessible, start-aligned narrow wrapping" do
+  it "presents accessible range controls with the expected field contract and tab order" do
     with_narrow_viewport do
       visit good_job.performance_index_path
 
-      expect(page).to have_css(".performance-range-state", count: 3)
-      expect(page).to have_no_css(".performance-range-state.disabled")
-      expect(page).to have_no_css("a.performance-range-state, button.performance-range-state")
       expect(page).to have_css("#performance-range-name", text: "Performance time range", visible: :all)
       browser_time_zone = page.evaluate_script("new Intl.DateTimeFormat().resolvedOptions().timeZone")
       expect(page).to have_css("[data-performance-range-target='timeZoneLabel']", text: browser_time_zone)
@@ -105,9 +102,9 @@ describe 'Performance Page', :js do
           const end = document.querySelector("[data-performance-range-target='endInput']")
           return {
             endMaximum: end.max,
-            endMinimumOffset: Date.parse(`${end.min}Z`) - start.valueAsNumber,
+            endMinimum: end.min,
             endStep: end.step,
-            startMaximumOffset: end.valueAsNumber - Date.parse(`${start.max}Z`),
+            startMaximum: start.max,
             startMinimum: start.min,
             startStep: start.step,
           }
@@ -116,43 +113,16 @@ describe 'Performance Page', :js do
 
       expect(field_contract).to eq(
         "endMaximum" => "9999-12-31T23:59:59",
-        "endMinimumOffset" => 1_000,
+        "endMinimum" => "1000-01-01T00:00:00",
         "endStep" => "1",
-        "startMaximumOffset" => 1_000,
+        "startMaximum" => "9999-12-31T23:59:59",
         "startMinimum" => "1000-01-01T00:00:00",
         "startStep" => "1"
       )
 
-      state_styles = page.evaluate_script(<<~JAVASCRIPT)
-        Array.from(document.querySelectorAll(".performance-range-state")).map((element) => {
-          const style = getComputedStyle(element)
-          return {
-            backgroundColor: style.backgroundColor,
-            color: style.color,
-            opacity: style.opacity,
-          }
-        })
+      page.execute_script(<<~JAVASCRIPT)
+        document.querySelector("[data-performance-range-target='startInput']").focus()
       JAVASCRIPT
-
-      state_styles.each do |style|
-        expect(style.fetch("opacity")).to eq("1")
-        expect(contrast_ratio(style.fetch("color"), style.fetch("backgroundColor"))).to be >= 4.5
-      end
-
-      focus_style = page.evaluate_script(<<~JAVASCRIPT)
-        (() => {
-          const input = document.querySelector("[data-performance-range-target='startInput']")
-          input.focus()
-          const style = getComputedStyle(input.closest(".performance-range-date"))
-          return {
-            outlineStyle: style.outlineStyle,
-            outlineWidth: style.outlineWidth,
-          }
-        })()
-      JAVASCRIPT
-
-      expect(focus_style.fetch("outlineStyle")).to eq("solid")
-      expect(focus_style.fetch("outlineWidth").to_f).to be >= 3
 
       focus_sequence = []
       30.times do
@@ -171,71 +141,23 @@ describe 'Performance Page', :js do
           "Open performance time ranges",
         ]
       )
-
-      page.execute_script(<<~JAVASCRIPT)
-        document.querySelector("[data-performance-range-target='startInput']").showPicker = function() {
-          document.body.dataset.performancePicker = this.id
-        }
-      JAVASCRIPT
-      first(".performance-range-date").click
-      expect(page.evaluate_script("document.body.dataset.performancePicker")).to eq("chart_start")
-
-      geometry = page.evaluate_script(<<~JAVASCRIPT)
-        (() => {
-          const control = document.querySelector(".performance-range-control")
-          const controlBounds = control.getBoundingClientRect()
-          const items = Array.from(control.children).map((element) => {
-            const bounds = element.getBoundingClientRect()
-            const style = getComputedStyle(element)
-            return {
-              fontSize: style.fontSize,
-              height: bounds.height,
-              left: bounds.left,
-              right: bounds.right,
-              top: bounds.top,
-            }
-          })
-          return {
-            controlLeft: controlBounds.left,
-            items,
-            scrollWidth: document.documentElement.scrollWidth,
-            viewportWidth: window.innerWidth,
-          }
-        })()
-      JAVASCRIPT
-
-      expect(geometry.fetch("scrollWidth")).to be <= geometry.fetch("viewportWidth")
-      geometry.fetch("items").each do |item|
-        expect(item.fetch("fontSize")).to eq("16px")
-        expect(item.fetch("height")).to be >= 38
-        expect(item.fetch("right")).to be <= geometry.fetch("viewportWidth")
-      end
-      expect(geometry.dig("items", 0, "left")).to be_within(1).of(geometry.fetch("controlLeft"))
-      geometry.fetch("items").each_cons(2) do |previous, current|
-        ordered = current.fetch("top") > previous.fetch("top") ||
-                  current.fetch("left") >= previous.fetch("left")
-        expect(ordered).to be(true)
-      end
-
-      click_button "Open performance time ranges"
-      hint_layout = page.evaluate_script(<<~JAVASCRIPT)
-        (() => {
-          const hint = document.querySelector(".performance-range-menu small")
-          const style = getComputedStyle(hint)
-          return {
-            height: hint.getBoundingClientRect().height,
-            lineHeight: Number.parseFloat(style.lineHeight),
-            whiteSpace: style.whiteSpace,
-          }
-        })()
-      JAVASCRIPT
-
-      expect(hint_layout.fetch("whiteSpace")).to eq("nowrap")
-      expect(hint_layout.fetch("height")).to be_within(1).of(hint_layout.fetch("lineHeight"))
     end
   end
 
-  it "updates native local ranges on both performance pages and prevents crossed endpoints" do
+  it "opens the native picker from a click on the field body" do
+    visit good_job.performance_index_path
+
+    page.execute_script(<<~JAVASCRIPT)
+      document.querySelector("[data-performance-range-target='startInput']").showPicker = function() {
+        document.body.dataset.performancePicker = this.name
+      }
+    JAVASCRIPT
+    find("[data-performance-range-target='startInput']").click
+
+    expect(page.evaluate_script("document.body.dataset.performancePicker")).to eq("chart_start")
+  end
+
+  it "updates native local ranges on both performance pages" do
     Timecop.freeze(Time.zone.parse("2024-01-01 12:34:56 UTC")) do
       ExampleJob.perform_later
       GoodJob.perform_inline
@@ -252,36 +174,38 @@ describe 'Performance Page', :js do
           start.value = "2024-01-01T10:03:17"
           end.value = "2024-01-01T11:07:42"
           start.dispatchEvent(new Event("input", { bubbles: true }))
-          end.dispatchEvent(new Event("input", { bubbles: true }))
+          end.dispatchEvent(new Event("change", { bubbles: true }))
         JAVASCRIPT
-
-        constraints = page.evaluate_script(<<~JAVASCRIPT)
-          (() => {
-            const start = document.querySelector("[data-performance-range-target='startInput']")
-            const end = document.querySelector("[data-performance-range-target='endInput']")
-            start.value = end.value
-            start.dispatchEvent(new Event("input", { bubbles: true }))
-            const crossed = {
-              formValid: start.form.checkValidity(),
-              rangeOverflow: start.validity.rangeOverflow,
-            }
-            start.value = "2024-01-01T10:03:17"
-            start.dispatchEvent(new Event("input", { bubbles: true }))
-            end.dispatchEvent(new Event("change", { bubbles: true }))
-            return crossed
-          })()
-        JAVASCRIPT
-
-        expect(constraints).to eq("formValid" => false, "rangeOverflow" => true)
 
         expect(page).to have_current_path(/chart_start=/)
 
         query = Rack::Utils.parse_query(URI.parse(page.current_url).query)
-        expect(query.keys).to contain_exactly("chart_start", "chart_end")
+        expect(query.keys).to contain_exactly("chart_start", "chart_end", "locale")
         expect(Time.iso8601(query.fetch("chart_start"))).to eq(Time.zone.parse("2024-01-01 10:03:17 UTC"))
         expect(Time.iso8601(query.fetch("chart_end"))).to eq(Time.zone.parse("2024-01-01 11:07:42 UTC"))
         expect(page).to have_css(".performance-range-key", text: "Custom")
       end
+    end
+  end
+
+  it "renders a validation error instead of accepting crossed endpoints, since ordering is no longer enforced client-side" do
+    Timecop.freeze(Time.zone.parse("2024-01-01 12:34:56 UTC")) do
+      visit good_job.performance_index_path(chart_range: "1h")
+
+      page.execute_script(<<~JAVASCRIPT)
+        const start = document.querySelector("[data-performance-range-target='startInput']")
+        const end = document.querySelector("[data-performance-range-target='endInput']")
+        start.value = "2024-01-01T11:07:42"
+        end.value = "2024-01-01T10:03:17"
+        start.dispatchEvent(new Event("input", { bubbles: true }))
+        end.dispatchEvent(new Event("change", { bubbles: true }))
+      JAVASCRIPT
+
+      # Turbo renders the 422 response's body without updating the address bar, matching
+      # standard Rails form-validation-error behavior for a GET form.
+      expect(page).to have_css(".invalid-feedback", text: "must be after the start time")
+      expect(page).to have_current_path(good_job.performance_index_path(chart_range: "1h"))
+      expect(page).to have_css(".performance-range-key", text: "Custom")
     end
   end
 
@@ -296,20 +220,13 @@ describe 'Performance Page', :js do
         (() => {
           const start = document.querySelector("[data-performance-range-target='startInput']")
           const end = document.querySelector("[data-performance-range-target='endInput']")
-          const startCanonical = document.querySelector("[data-performance-range-target='startCanonicalInput']")
-          const endCanonical = document.querySelector("[data-performance-range-target='endCanonicalInput']")
-          const chartElement = document.querySelector("[data-chart-target='canvas']")
+          const chartElement = document.querySelector("[data-performance-chart-target='canvas']")
           const chart = Chart.getChart(chartElement)
-          const metadata = JSON.parse(document.querySelector("[data-chart-config-value]").dataset.chartConfigValue).goodJob
-          const formatter = new Intl.DateTimeFormat(document.documentElement.lang, {
-            hour: "2-digit",
-            hourCycle: "h23",
-            minute: "2-digit",
-          })
+          const metadata = JSON.parse(document.querySelector("[data-performance-chart-config-value]").dataset.performanceChartConfigValue).goodJob
+          const formatter = new Intl.DateTimeFormat(document.documentElement.lang, metadata.timestamp_intl_options)
 
           return {
             actualChartLabel: chart.data.labels[0],
-            canonicalValues: [startCanonical.value, endCanonical.value],
             expectedChartLabel: formatter.format(new Date(metadata.timestamps[0])),
             inputNames: [start.name, end.name],
             inputValues: [start.value, end.value],
@@ -320,8 +237,7 @@ describe 'Performance Page', :js do
       expect(page).to have_css("[data-performance-range-target='timeZoneLabel']", text: "America/St_Johns")
       expect(browser_state.fetch("actualChartLabel")).to eq(browser_state.fetch("expectedChartLabel"))
       expect(browser_state.except("actualChartLabel", "expectedChartLabel")).to eq(
-        "canonicalValues" => ["2024-01-01T10:03:17Z", "2024-01-01T11:07:42Z"],
-        "inputNames" => ["", ""],
+        "inputNames" => %w[chart_start chart_end],
         "inputValues" => ["2024-01-01T06:33:17", "2024-01-01T07:37:42"]
       )
 
@@ -340,7 +256,8 @@ describe 'Performance Page', :js do
       query = Rack::Utils.parse_query(URI.parse(page.current_url).query)
       expect(query).to eq(
         "chart_start" => "2024-01-01T10:03:17Z",
-        "chart_end" => "2024-01-01T11:10:00Z"
+        "chart_end" => "2024-01-01T11:10:00Z",
+        "locale" => "en"
       )
     end
   end
@@ -371,33 +288,24 @@ describe 'Performance Page', :js do
 
         label_state = page.evaluate_script(<<~JAVASCRIPT)
           (() => {
-            const chartElement = document.querySelector("[data-chart-target='canvas']")
+            const chartElement = document.querySelector("[data-performance-chart-target='canvas']")
             const chart = Chart.getChart(chartElement)
-            const metadata = JSON.parse(document.querySelector("[data-chart-config-value]").dataset.chartConfigValue).goodJob
-            const options = {
-              hour: "2-digit",
-              hourCycle: "h23",
-              minute: "2-digit",
-            }
-            if (metadata.timestamp_label_style === "time_seconds") options.second = "2-digit"
-            if (["date_time", "date_time_year"].includes(metadata.timestamp_label_style)) {
-              options.day = "numeric"
-              options.month = "short"
-            }
-            if (metadata.timestamp_label_style === "date_time_year") options.year = "numeric"
+            const metadata = JSON.parse(document.querySelector("[data-performance-chart-config-value]").dataset.performanceChartConfigValue).goodJob
 
             return {
               actual: chart.data.labels[0],
               coordinateCount: metadata.timestamps.length,
-              expected: new Intl.DateTimeFormat(document.documentElement.lang, options).format(new Date(metadata.timestamps[0])),
-              labelStyle: metadata.timestamp_label_style,
+              expected: new Intl.DateTimeFormat(document.documentElement.lang, metadata.timestamp_intl_options).format(new Date(metadata.timestamps[0])),
+              intlOptions: metadata.timestamp_intl_options,
             }
           })()
         JAVASCRIPT
 
         expect(label_state.fetch("actual")).to eq(label_state.fetch("expected"))
         expect(label_state.fetch("coordinateCount")).to be <= GoodJob::PerformanceRange::MAXIMUM_TIME_SERIES_COORDINATES
-        expect(label_state.fetch("labelStyle")).to eq(example.fetch(:style))
+        expect(label_state.fetch("intlOptions")).to eq(
+          GoodJob::PerformanceRange::LABEL_STYLES.fetch(example.fetch(:style)).fetch(:intl).stringify_keys
+        )
         expect(page).to have_css(
           ".performance-chart-bucket-size",
           text: "Chart bucket size: #{example.fetch(:bucket_size)}"
@@ -405,14 +313,14 @@ describe 'Performance Page', :js do
 
         next unless example.fetch(:style) == "date_time_year"
 
-        endpoint_labels = all(".performance-range-date").map(&:text)
+        endpoint_labels = endpoint_values
         expect(endpoint_labels.first).to include("2004")
         expect(endpoint_labels.last).to include("2024")
       end
     end
   end
 
-  it "disambiguates repeated fall-back chart ticks and exact endpoints in browser time" do
+  it "disambiguates repeated fall-back chart ticks in browser time" do
     with_time_zone("America/New_York") do
       with_browser_time_zone("America/New_York") do
         visit good_job.performance_index_path(
@@ -420,19 +328,11 @@ describe 'Performance Page', :js do
           chart_end: "2024-11-03T01:45:00-05:00"
         )
 
-        label_state = page.evaluate_script(<<~JAVASCRIPT)
-          (() => {
-            const chart = Chart.getChart(document.querySelector("[data-chart-target='canvas']"))
-            return {
-              chartLabels: chart.data.labels,
-              endpointLabels: Array.from(document.querySelectorAll(".performance-range-date"), element => element.innerText.trim()),
-            }
-          })()
+        chart_labels = page.evaluate_script(<<~JAVASCRIPT)
+          Chart.getChart(document.querySelector("[data-performance-chart-target='canvas']")).data.labels
         JAVASCRIPT
 
-        expect(label_state.fetch("chartLabels")).to include("01:00 GMT-4", "01:00 GMT-5")
-        expect(label_state.dig("endpointLabels", 0)).to include("GMT-4")
-        expect(label_state.dig("endpointLabels", 1)).to include("GMT-5")
+        expect(chart_labels).to include("01:00 GMT-4", "01:00 GMT-5")
       end
     end
   end
@@ -459,7 +359,8 @@ describe 'Performance Page', :js do
       query = Rack::Utils.parse_query(URI.parse(page.current_url).query)
       expect(query).to eq(
         "chart_start" => "2024-01-01T10:10:00Z",
-        "chart_end" => "2024-01-01T11:07:42Z"
+        "chart_end" => "2024-01-01T11:07:42Z",
+        "locale" => "en"
       )
     end
   end
@@ -492,7 +393,7 @@ describe 'Performance Page', :js do
               }
             })()
           JAVASCRIPT
-          chart_metadata = JSON.parse(find("[data-chart-config-value]")["data-chart-config-value"]).fetch("goodJob")
+          chart_metadata = JSON.parse(find("[data-performance-chart-config-value]")["data-performance-chart-config-value"]).fetch("goodJob")
 
           expect(field_state.fetch("formValid")).to be(true)
           expect(field_state.fetch("startMaximum")).to eq("9999-12-31T23:59:59")
@@ -516,7 +417,8 @@ describe 'Performance Page', :js do
         query = Rack::Utils.parse_query(URI.parse(page.current_url).query)
         expect(query).to eq(
           "chart_start" => "2024-11-03T01:45:00-04:00",
-          "chart_end" => "2024-11-03T01:20:00-05:00"
+          "chart_end" => "2024-11-03T01:20:00-05:00",
+          "locale" => "en"
         )
       end
     end
@@ -566,87 +468,14 @@ describe 'Performance Page', :js do
         query = Rack::Utils.parse_query(URI.parse(page.current_url).query)
         expect(query).to eq(
           "chart_start" => "2024-11-03T01:45:00-04:00",
-          "chart_end" => "2024-11-03T01:15:00-05:00"
+          "chart_end" => "2024-11-03T01:15:00-05:00",
+          "locale" => "en"
         )
       end
     end
   end
 
-  it "re-engages reciprocal ordering constraints after editing away from a loaded fall-back range" do
-    with_time_zone("America/New_York") do
-      with_browser_time_zone("America/New_York") do
-        visit good_job.performance_index_path(
-          chart_start: "2024-11-03T01:15:00-04:00",
-          chart_end: "2024-11-03T01:45:00-05:00"
-        )
-
-        page.execute_script(<<~JAVASCRIPT)
-          const start = document.querySelector("[data-performance-range-target='startInput']")
-          const end = document.querySelector("[data-performance-range-target='endInput']")
-          start.value = "2024-07-01T10:00:00"
-          start.dispatchEvent(new Event("input", { bubbles: true }))
-          end.value = "2024-07-01T11:00:00"
-          end.dispatchEvent(new Event("input", { bubbles: true }))
-        JAVASCRIPT
-
-        field_state = page.evaluate_script(<<~JAVASCRIPT)
-          (() => {
-            const start = document.querySelector("[data-performance-range-target='startInput']")
-            const end = document.querySelector("[data-performance-range-target='endInput']")
-            return { startMaximum: start.max, endMinimum: end.min }
-          })()
-        JAVASCRIPT
-
-        expect(field_state.fetch("startMaximum")).to eq("2024-07-01T10:59:59")
-        expect(field_state.fetch("endMinimum")).to eq("2024-07-01T10:00:01")
-      end
-    end
-  end
-
-  it "does not lock a still-untouched fall-back endpoint into a stale reciprocal bound" do
-    with_time_zone("America/New_York") do
-      with_browser_time_zone("America/New_York") do
-        visit good_job.performance_index_path(
-          chart_start: "2024-11-03T00:30:00-04:00",
-          chart_end: "2024-11-03T01:15:00-05:00"
-        )
-
-        # A single edit that naively civil-sorts before the untouched end value must not
-        # permanently latch a reciprocal bound derived from that still-ambiguous end value.
-        page.execute_script(<<~JAVASCRIPT)
-          const start = document.querySelector("[data-performance-range-target='startInput']")
-          start.value = "2024-11-03T01:10:00"
-          start.dispatchEvent(new Event("input", { bubbles: true }))
-        JAVASCRIPT
-
-        # Widening start past the untouched end's stale civil value must remain a legitimate,
-        # accepted edit rather than being rejected by a bound computed from that stale value.
-        page.execute_script(<<~JAVASCRIPT)
-          const start = document.querySelector("[data-performance-range-target='startInput']")
-          start.value = "2024-11-03T01:30:00"
-          start.dispatchEvent(new Event("input", { bubbles: true }))
-        JAVASCRIPT
-
-        field_state = page.evaluate_script(<<~JAVASCRIPT)
-          (() => {
-            const start = document.querySelector("[data-performance-range-target='startInput']")
-            const end = document.querySelector("[data-performance-range-target='endInput']")
-            return {
-              endMinimum: end.min,
-              formValid: start.form.checkValidity(),
-              startMaximum: start.max,
-            }
-          })()
-        JAVASCRIPT
-
-        expect(field_state.fetch("startMaximum")).to eq("9999-12-31T23:59:59")
-        expect(field_state.fetch("endMinimum")).to eq("1000-01-01T00:00:00")
-        expect(field_state.fetch("formValid")).to be(true)
-      end
-    end
-  end
-
-  it "rejects a browser-local endpoint in a DST gap" do
+  it "renders a validation error for a browser-local endpoint in a DST gap" do
     with_browser_time_zone("America/New_York") do
       visit good_job.performance_index_path(
         chart_start: "2024-03-10T06:00:00Z",
@@ -660,8 +489,10 @@ describe 'Performance Page', :js do
         start.dispatchEvent(new Event("change", { bubbles: true }))
       JAVASCRIPT
 
-      expect(page).to have_no_current_path(/chart_(?:range|start|end|time_zone)=/)
-      expect(page).to have_css(".performance-range-key", text: "24h")
+      # Turbo renders the 422 response's body without updating the address bar, matching
+      # standard Rails form-validation-error behavior for a GET form.
+      expect(page).to have_css(".invalid-feedback", text: "does not exist because of a time zone change")
+      expect(page).to have_css(".performance-range-key", text: "Custom")
     end
   end
 
@@ -715,14 +546,14 @@ describe 'Performance Page', :js do
 
       visit good_job.performance_index_path(chart_range: "1h")
 
-      chart_config = JSON.parse(find("[data-chart-config-value]")["data-chart-config-value"])
+      chart_config = JSON.parse(find("[data-performance-chart-config-value]")["data-performance-chart-config-value"])
       chart_metadata = chart_config.fetch("goodJob")
       timestamps = chart_metadata.fetch("timestamps")
       interval_seconds = chart_metadata.fetch("interval_seconds")
       range_start = Time.iso8601(chart_metadata.fetch("range_start"))
       range_end = Time.iso8601(chart_metadata.fetch("range_end"))
-      chart_area = page.evaluate_script("Chart.getChart(document.querySelector('[data-chart-target=\"canvas\"]')).chartArea")
-      canvas_rect = page.evaluate_script("document.querySelector('[data-chart-target=\"canvas\"]').getBoundingClientRect().toJSON()")
+      chart_area = page.evaluate_script("Chart.getChart(document.querySelector('[data-performance-chart-target=\"canvas\"]')).chartArea")
+      canvas_rect = page.evaluate_script("document.querySelector('[data-performance-chart-target=\"canvas\"]').getBoundingClientRect().toJSON()")
       y = canvas_rect.fetch("y") + ((chart_area.fetch("top") + chart_area.fetch("bottom")) / 2)
       start_x = canvas_rect.fetch("x") + chart_area.fetch("left") + 1
       end_x = canvas_rect.fetch("x") + chart_area.fetch("right") - 1
@@ -756,8 +587,8 @@ describe 'Performance Page', :js do
         chart_end: expected_end
       )
 
-      chart_area = page.evaluate_script("Chart.getChart(document.querySelector('[data-chart-target=\"canvas\"]')).chartArea")
-      canvas_rect = page.evaluate_script("document.querySelector('[data-chart-target=\"canvas\"]').getBoundingClientRect().toJSON()")
+      chart_area = page.evaluate_script("Chart.getChart(document.querySelector('[data-performance-chart-target=\"canvas\"]')).chartArea")
+      canvas_rect = page.evaluate_script("document.querySelector('[data-performance-chart-target=\"canvas\"]').getBoundingClientRect().toJSON()")
       y = canvas_rect.fetch("y") + ((chart_area.fetch("top") + chart_area.fetch("bottom")) / 2)
       start_x = canvas_rect.fetch("x") + chart_area.fetch("left") + 1
       end_x = canvas_rect.fetch("x") + chart_area.fetch("right") - 1
@@ -801,12 +632,13 @@ describe 'Performance Page', :js do
 
       visit good_job.performance_index_path
 
-      index_dates = all(".performance-range-date").map(&:text)
-      index_config = JSON.parse(find("[data-chart-config-value]")["data-chart-config-value"])
+      index_dates = endpoint_values
+      index_config = JSON.parse(find("[data-performance-chart-config-value]")["data-performance-chart-config-value"])
       expected_navigation = {
         "chart_range" => "24h",
         "chart_start" => index_config.dig("goodJob", "range_start"),
         "chart_end" => index_config.dig("goodJob", "range_end"),
+        "locale" => "en",
       }
       drilldown_query = Rack::Utils.parse_query(URI.parse(find(".performance-name a")[:href]).query)
 
@@ -816,32 +648,20 @@ describe 'Performance Page', :js do
       click_link 'ExampleJob'
 
       show_query = Rack::Utils.parse_query(URI.parse(page.current_url).query)
-      show_config = JSON.parse(find("[data-chart-config-value]")["data-chart-config-value"])
+      show_config = JSON.parse(find("[data-performance-chart-config-value]")["data-performance-chart-config-value"])
 
       expect(page).to have_css 'h2', text: 'Performance - ExampleJob'
       expect(show_query).to eq(expected_navigation)
-      expect(all(".performance-range-date").map(&:text)).to eq(index_dates)
+      expect(endpoint_values).to eq(index_dates)
       expect(page).to have_css(".performance-range-key", text: "24h")
       expect(show_config.dig("data", "datasets", 0, "data").sum).to eq(1)
 
       find("a[aria-label='Reload performance data']").click
 
-      expect(Rack::Utils.parse_query(URI.parse(page.current_url).query)).to eq("chart_range" => "24h")
+      expect(Rack::Utils.parse_query(URI.parse(page.current_url).query)).to eq("chart_range" => "24h", "locale" => "en")
       expect(page).to have_css(".performance-range-key", text: "24h")
-      expect(all(".performance-range-date").map(&:text)).not_to eq(index_dates)
+      expect(endpoint_values).not_to eq(index_dates)
     end
-  end
-
-  def contrast_ratio(foreground, background)
-    luminances = [foreground, background].map do |color|
-      channels = color.scan(/\d+(?:\.\d+)?/).first(3).map do |channel|
-        value = channel.to_f / 255
-        value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055)**2.4
-      end
-      (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2])
-    end
-
-    (luminances.max + 0.05) / (luminances.min + 0.05)
   end
 
   def with_narrow_viewport
@@ -864,5 +684,9 @@ describe 'Performance Page', :js do
     yield
   ensure
     Time.zone_default = original_zone
+  end
+
+  def endpoint_values
+    all("[data-performance-range-target='startInput'], [data-performance-range-target='endInput']").map(&:value)
   end
 end

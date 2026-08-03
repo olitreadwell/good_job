@@ -1,131 +1,48 @@
 import { Controller } from "stimulus"
-import { buildTimeZoneNameFormatter } from "timezone_name_formatter"
-import ChartController from "chart_controller"
 
-// Enhances the Performance range form while leaving parsing and validation authoritative on the server.
+// Enhances the Performance range form for display only; parsing and validation are always
+// authoritative on the server (GoodJob::PerformanceRange), which surfaces real validation
+// errors instead of silently falling back. This controller's only jobs are: detect the
+// browser's timezone once and submit it, show the fields in that zone for readability, and
+// auto-submit on change.
+//
+// Round-tripping exact instants through offset-less datetime-local values means an endpoint
+// inside a DST fall-back repeated hour re-submits ambiguously; the server resolves starts to
+// the earlier occurrence and ends to the later one (PerformanceRange#parse_local_time).
 export default class extends Controller {
-  static targets = [
-    "endCanonicalInput",
-    "endInput",
-    "endLabel",
-    "startCanonicalInput",
-    "startInput",
-    "startLabel",
-    "timeZoneInput",
-    "timeZoneLabel",
-  ]
+  static targets = ["endInput", "startInput", "timeZoneInput", "timeZoneLabel"]
   static values = {
-    applicationTimeZone: String,
-    applicationTimeZoneIdentifier: String,
-    endFallback: String,
-    endLabel: String,
     endTimestamp: String,
-    labelStyle: String,
-    maximum: String,
-    minimum: String,
-    startFallback: String,
-    startLabel: String,
+    invalid: Boolean,
     startTimestamp: String,
   }
 
-  // Rebuild from immutable server values so Turbo cache restoration cannot apply localization twice.
   connect() {
-    this.#restoreApplicationTimeZoneFallback()
-    this.#configureFormatter()
-    this.#enhanceBrowserTimeZone()
+    // Leave an invalid submission's redisplayed raw input, error state, and application
+    // time zone untouched; switching the submitted zone under already-rendered values would
+    // shift the untouched endpoint on the corrective resubmit.
+    if (this.invalidValue) return
 
-    this.loadedStartValue = this.startInputTarget.value
-    this.loadedEndValue = this.endInputTarget.value
-    this.backwardClockTransition = this.#crossesBackwardClockTransition()
-    this.#configureExactFormatter()
-    this.reciprocalConstraints =
-      !this.backwardClockTransition &&
-      this.startInputTarget.valueAsNumber < this.endInputTarget.valueAsNumber
-    this.constrain()
-  }
+    try {
+      const browserTimeZone = this.#detectBrowserTimeZone()
+      const startValue = this.#browserLocalValue(this.startTimestampValue, this.startInputTarget)
+      const endValue = this.#browserLocalValue(this.endTimestampValue, this.endInputTarget)
+      if (!browserTimeZone || !startValue || !endValue) return
 
-  // Remember which civil endpoint must be resolved in the browser timezone by the server.
-  edit(event) {
-    if (this.browserTimeZone) event.currentTarget.dataset.performanceRangeEdited = "true"
-  }
-
-  // Prevent the native controls from accepting equal or reversed ordinary wall-clock endpoints.
-  constrain() {
-    const startMilliseconds = this.#civilMilliseconds(this.startInputTarget.value)
-    const endMilliseconds = this.#civilMilliseconds(this.endInputTarget.value)
-
-    // Offset-free native fields cannot order repeated wall-clock values. A reciprocal bound is
-    // only trustworthy once BOTH endpoints have moved away from their loaded values: deriving a
-    // bound from a single still-untouched endpoint of a known backward transition would apply
-    // plain civil-string arithmetic to a value that may represent either fold occurrence. Track
-    // this against the live field values (not the edited-tracking dataset flag, which is gated on
-    // browser-zone enhancement and can otherwise never fire) so the relaxation always lifts once
-    // the user has actually replaced both endpoints.
-    const bothEndpointsChanged =
-      this.startInputTarget.value !== this.loadedStartValue &&
-      this.endInputTarget.value !== this.loadedEndValue
-    if (
-      !this.reciprocalConstraints &&
-      !(this.backwardClockTransition && !bothEndpointsChanged) &&
-      startMilliseconds !== null &&
-      endMilliseconds !== null &&
-      startMilliseconds < endMilliseconds
-    ) {
-      this.reciprocalConstraints = true
-    }
-
-    if (this.reciprocalConstraints) {
-      this.startInputTarget.max = this.#offsetLocal(
-        this.endInputTarget.value,
-        -1,
-        this.maximumValue,
-      )
-      this.endInputTarget.min = this.#offsetLocal(
-        this.startInputTarget.value,
-        1,
-        this.minimumValue,
-      )
-    } else {
-      this.startInputTarget.max = this.maximumValue
-      this.endInputTarget.min = this.minimumValue
-    }
-
-    if (this.formatter) {
-      this.startLabelTarget.textContent = this.#formatEndpointLabel(
-        this.startInputTarget,
-        this.startTimestampValue,
-      )
-      this.endLabelTarget.textContent = this.#formatEndpointLabel(
-        this.endInputTarget,
-        this.endTimestampValue,
-      )
+      // Commit atomically so the fields, the visible zone label, and the submitted
+      // chart_time_zone always agree on one zone.
+      this.startInputTarget.value = startValue
+      this.endInputTarget.value = endValue
+      this.timeZoneLabelTarget.textContent = browserTimeZone
+      this.timeZoneInputTarget.value = browserTimeZone
+      this.timeZoneInputTarget.disabled = false
+    } catch (_error) {
+      // Keep the server-rendered application-zone values and label when enhancement is unavailable.
     }
   }
 
-  // Prepare every submission path, including an implicit submit that bypasses endpoint change.
-  prepareSubmission() {
-    if (this.browserTimeZone) {
-      const endpointPairs = [
-        [this.startInputTarget, this.startCanonicalInputTarget],
-        [this.endInputTarget, this.endCanonicalInputTarget],
-      ]
-      let edited = false
-
-      endpointPairs.forEach(([input, canonicalInput]) => {
-        if (input.dataset.performanceRangeEdited !== "true") return
-
-        canonicalInput.value = input.value
-        edited = true
-      })
-
-      if (edited) {
-        this.timeZoneInputTarget.value = this.browserTimeZone
-        this.timeZoneInputTarget.disabled = false
-      }
-    }
-  }
-
-  // Submit exact untouched endpoints and browser-local civil values only for edited endpoints.
+  // Submit on every change; the server's response (canonical state or validation errors) is
+  // the only feedback.
   submitRange() {
     if (!this.element.checkValidity()) return
 
@@ -146,98 +63,23 @@ export default class extends Controller {
     }
   }
 
-  #restoreApplicationTimeZoneFallback() {
-    this.browserTimeZone = null
-    this.startInputTarget.name = "chart_start"
-    this.endInputTarget.name = "chart_end"
-    this.startInputTarget.value = this.startFallbackValue
-    this.endInputTarget.value = this.endFallbackValue
-    delete this.startInputTarget.dataset.performanceRangeEdited
-    delete this.endInputTarget.dataset.performanceRangeEdited
-
-    this.startCanonicalInputTarget.value = this.startTimestampValue
-    this.startCanonicalInputTarget.disabled = true
-    this.endCanonicalInputTarget.value = this.endTimestampValue
-    this.endCanonicalInputTarget.disabled = true
-    this.timeZoneInputTarget.value = ""
-    this.timeZoneInputTarget.disabled = true
-
-    this.startLabelTarget.textContent = this.startLabelValue
-    this.endLabelTarget.textContent = this.endLabelValue
-    this.timeZoneLabelTarget.textContent = this.applicationTimeZoneValue
-  }
-
-  #configureFormatter() {
-    this.formatter = null
-
+  #detectBrowserTimeZone() {
     try {
-      // The input already represents a wall clock. UTC prevents Intl from shifting it again.
-      this.formatter = new Intl.DateTimeFormat(document.documentElement.lang, {
-        day: "numeric",
-        hour: "2-digit",
-        hourCycle: "h23",
-        minute: "2-digit",
-        month: "short",
-        second: "2-digit",
-        timeZone: "UTC",
-        ...(this.labelStyleValue === ChartController.LABEL_STYLE_DATE_TIME_YEAR ? { year: "numeric" } : {}),
-      })
+      return new Intl.DateTimeFormat().resolvedOptions().timeZone || null
     } catch (_error) {
-      // Server-rendered application-zone values and labels remain accurate without Intl.
+      return null
     }
   }
 
-  #configureExactFormatter() {
-    this.exactFormatter = null
-    if (!this.backwardClockTransition) return
-
-    // Render in whichever zone the fields are actually displaying — the browser zone once
-    // enhancement has activated, otherwise the application zone the fallback values came from.
-    // Without this override the formatter defaults to the runtime's own zone, which only
-    // coincidentally matches the displayed fields when enhancement is active.
-    this.exactFormatter = buildTimeZoneNameFormatter(document.documentElement.lang, {
-      day: "numeric",
-      hour: "2-digit",
-      hourCycle: "h23",
-      minute: "2-digit",
-      month: "short",
-      second: "2-digit",
-      timeZone: this.browserTimeZone || this.applicationTimeZoneIdentifierValue,
-      ...(this.labelStyleValue === ChartController.LABEL_STYLE_DATE_TIME_YEAR ? { year: "numeric" } : {}),
-    })
-  }
-
-  #enhanceBrowserTimeZone() {
-    if (!this.formatter) return
-
-    try {
-      const browserTimeZone = new Intl.DateTimeFormat().resolvedOptions().timeZone
-      const startValue = this.#browserLocalValue(this.startTimestampValue)
-      const endValue = this.#browserLocalValue(this.endTimestampValue)
-      if (!browserTimeZone || !startValue || !endValue) return
-
-      this.startInputTarget.value = startValue
-      this.endInputTarget.value = endValue
-      this.startInputTarget.removeAttribute("name")
-      this.endInputTarget.removeAttribute("name")
-      this.startCanonicalInputTarget.disabled = false
-      this.endCanonicalInputTarget.disabled = false
-      this.timeZoneLabelTarget.textContent = browserTimeZone
-      this.browserTimeZone = browserTimeZone
-    } catch (_error) {
-      // Keep the whole control in its application-zone fallback when enhancement is unavailable.
-    }
-  }
-
-  #browserLocalValue(timestamp) {
+  #browserLocalValue(timestamp, input) {
     const date = new Date(timestamp)
     if (!Number.isFinite(date.getTime())) return null
 
-    const year = date.getFullYear()
-    if (year < 1000 || year > 9999) return null
+    const year = String(date.getFullYear())
+    if (year.length !== 4) return null
 
-    return [
-      String(year).padStart(4, "0"),
+    const value = [
+      year,
       "-",
       String(date.getMonth() + 1).padStart(2, "0"),
       "-",
@@ -249,73 +91,11 @@ export default class extends Controller {
       ":",
       String(date.getSeconds()).padStart(2, "0"),
     ].join("")
-  }
 
-  // Convert a wall-clock value to a browser-zone-independent civil timestamp.
-  #civilMilliseconds(value) {
-    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value)
-    if (!match) return null
+    // The input's server-rendered min/max carry PerformanceRange's portable-year bounds;
+    // four-digit-year datetime-local strings compare lexicographically.
+    if ((input.min && value < input.min) || (input.max && value > input.max)) return null
 
-    const [, year, month, day, hour, minute, second = "00"] = match
-    const milliseconds = Date.UTC(
-      Number(year),
-      Number(month) - 1,
-      Number(day),
-      Number(hour),
-      Number(minute),
-      Number(second),
-    )
-    const normalized = `${year}-${month}-${day}T${hour}:${minute}:${second}`
-
-    return this.#localValue(milliseconds) === normalized ? milliseconds : null
-  }
-
-  // Native civil fields cannot express the repeated hour in a backward clock transition.
-  // Intentionally checks the zone currently displayed in the inputs (browser zone after
-  // #enhanceBrowserTimeZone, application zone otherwise), not the server's Time.zone: the
-  // Ruby counterpart, GoodJob::PerformanceRange#backward_clock_transition?, makes the same
-  // check for its own (server-rendered) zone. Each must use its own zone, not the other's.
-  #crossesBackwardClockTransition() {
-    const exactStart = new Date(this.startTimestampValue).getTime()
-    const exactEnd = new Date(this.endTimestampValue).getTime()
-    const civilStart = this.#civilMilliseconds(this.startInputTarget.value)
-    const civilEnd = this.#civilMilliseconds(this.endInputTarget.value)
-    if (![exactStart, exactEnd, civilStart, civilEnd].every(Number.isFinite)) return false
-
-    return exactEnd - exactStart > civilEnd - civilStart
-  }
-
-  #formatLabel(value) {
-    const milliseconds = this.#civilMilliseconds(value)
-    return milliseconds === null ? "—" : this.formatter.format(new Date(milliseconds))
-  }
-
-  #formatEndpointLabel(input, timestamp) {
-    if (
-      this.exactFormatter &&
-      input.dataset.performanceRangeEdited !== "true"
-    ) {
-      const date = new Date(timestamp)
-      if (Number.isFinite(date.getTime())) return this.exactFormatter.format(date)
-    }
-
-    return this.#formatLabel(input.value)
-  }
-
-  // Move a civil value by whole seconds and clamp it to the four-digit-year bounds.
-  #offsetLocal(value, seconds, fallback) {
-    const milliseconds = this.#civilMilliseconds(value)
-    if (milliseconds === null) return fallback
-
-    const minimum = this.#civilMilliseconds(this.minimumValue)
-    const maximum = this.#civilMilliseconds(this.maximumValue)
-    const bounded = Math.min(maximum, Math.max(minimum, milliseconds + (seconds * 1000)))
-
-    return this.#localValue(bounded)
-  }
-
-  // Serialize a civil timestamp in the normalized shape expected by datetime-local.
-  #localValue(milliseconds) {
-    return new Date(milliseconds).toISOString().slice(0, 19)
+    return value
   }
 }

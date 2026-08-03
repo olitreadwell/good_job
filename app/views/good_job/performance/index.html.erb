@@ -2,11 +2,11 @@
   <h2 class="pt-3 pb-2"><%= t ".title" %></h2>
 </div>
 
-<%= render "range", performance_range: @performance_range, drag_enabled: true, range_context: @performance_range_context, range_path: performance_index_path(locale: nil), bucket_size: format_performance_bucket_size(@performance_range.interval_seconds) %>
+<%= render "range", performance_range: @performance_range, drag_enabled: true, bucket_size: format_performance_bucket_size(@performance_range.interval_seconds) %>
 
-<%= render 'good_job/shared/chart_container', chart_data: @chart_data %>
+<%= render 'good_job/shared/chart_container', chart_data: @chart_data, chart_controller_name: "performance-chart" %>
 
-<% performance_range_query = @performance_range_context.merge(@performance_range.navigation_params).to_query %>
+<% performance_range_params = @performance_range.navigation_params.symbolize_keys %>
 
 <div class="my-3 card">
   <div class="list-group list-group-flush text-nowrap" role="table">
@@ -29,7 +29,7 @@
         <div class="row align-items-center">
           <div class="col-12 col-lg-4 performance-name">
             <div class="d-flex gap-3 justify-content-between">
-              <%= link_to performance.job_class, "#{performance_path(performance.job_class, locale: nil)}?#{performance_range_query}" %>
+              <%= link_to performance.job_class, performance_path(performance.job_class, performance_range_params) %>
             </div>
           </div>
           <div class="col-6 col-lg-2 text-wrap">

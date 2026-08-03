@@ -2,6 +2,6 @@
   <h2 class="pt-3 pb-2"><%= t ".title" %> - <%= @job_class %></h2>
 </div>
 
-<%= render "range", performance_range: @performance_range, range_context: @performance_range_context, range_path: performance_path(@job_class, locale: nil) %>
+<%= render "range", performance_range: @performance_range %>
 
-<%= render 'good_job/shared/chart_container', chart_data: @chart_data %>
+<%= render 'good_job/shared/chart_container', chart_data: @chart_data, chart_controller_name: "performance-chart" %>

@@ -255,6 +255,26 @@ es:
         custom_range: Personalizado
         custom_range_hint: arrastrar en el gráfico
         end_time: Hora de fin
+        errors:
+          base:
+            malformed: No se pudo interpretar el intervalo de tiempo enviado.
+          chart_end:
+            after_start: debe ser posterior a la hora de inicio
+            invalid: debe ser una fecha y hora válidas
+            nonexistent: no existe debido a un cambio de horario
+            repeated: se envió más de una vez
+            required: es obligatorio cuando se indica una hora de inicio
+          chart_range:
+            repeated: se envió más de una vez
+            unknown: no es un intervalo de tiempo reconocido
+          chart_start:
+            invalid: debe ser una fecha y hora válidas
+            nonexistent: no existe debido a un cambio de horario
+            repeated: se envió más de una vez
+            required: es obligatorio cuando se indica una hora de fin
+          chart_time_zone:
+            invalid: no es una zona horaria reconocida
+            repeated: se envió más de una vez
         open_time_ranges: Abrir intervalos de tiempo de rendimiento
         quick_ranges: Intervalos rápidos
         range_options:

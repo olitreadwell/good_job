@@ -255,6 +255,26 @@ ja:
         custom_range: カスタム
         custom_range_hint: グラフ上でドラッグ
         end_time: 終了時刻
+        errors:
+          base:
+            malformed: 送信された時間範囲を解釈できませんでした。
+          chart_end:
+            after_start: 開始時刻より後である必要があります
+            invalid: 有効な日時である必要があります
+            nonexistent: タイムゾーンの変更により存在しません
+            repeated: 複数回送信されました
+            required: 開始時刻が指定されている場合は必須です
+          chart_range:
+            repeated: 複数回送信されました
+            unknown: 認識できない時間範囲です
+          chart_start:
+            invalid: 有効な日時である必要があります
+            nonexistent: タイムゾーンの変更により存在しません
+            repeated: 複数回送信されました
+            required: 終了時刻が指定されている場合は必須です
+          chart_time_zone:
+            invalid: 認識できないタイムゾーンです
+            repeated: 複数回送信されました
         open_time_ranges: パフォーマンスの時間範囲を開く
         quick_ranges: クイック範囲
         range_options:

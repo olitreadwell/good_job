@@ -255,6 +255,26 @@ ko:
         custom_range: 사용자 지정
         custom_range_hint: 차트에서 드래그
         end_time: 종료 시간
+        errors:
+          base:
+            malformed: 제출된 시간 범위를 이해할 수 없습니다.
+          chart_end:
+            after_start: 시작 시간보다 나중이어야 합니다
+            invalid: 유효한 날짜와 시간이어야 합니다
+            nonexistent: 시간대 변경으로 인해 존재하지 않습니다
+            repeated: 두 번 이상 제출되었습니다
+            required: 시작 시간이 지정된 경우 필수입니다
+          chart_range:
+            repeated: 두 번 이상 제출되었습니다
+            unknown: 인식할 수 없는 시간 범위입니다
+          chart_start:
+            invalid: 유효한 날짜와 시간이어야 합니다
+            nonexistent: 시간대 변경으로 인해 존재하지 않습니다
+            repeated: 두 번 이상 제출되었습니다
+            required: 종료 시간이 지정된 경우 필수입니다
+          chart_time_zone:
+            invalid: 인식할 수 없는 시간대입니다
+            repeated: 두 번 이상 제출되었습니다
         open_time_ranges: 성능 시간 범위 열기
         quick_ranges: 빠른 범위
         range_options:

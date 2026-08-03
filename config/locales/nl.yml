@@ -255,6 +255,26 @@ nl:
         custom_range: Aangepast
         custom_range_hint: slepen op grafiek
         end_time: Eindtijd
+        errors:
+          base:
+            malformed: Het opgegeven tijdsbereik kon niet worden begrepen.
+          chart_end:
+            after_start: moet na de starttijd liggen
+            invalid: moet een geldige datum en tijd zijn
+            nonexistent: bestaat niet vanwege een tijdzonewijziging
+            repeated: is meer dan één keer verzonden
+            required: is verplicht wanneer een starttijd is opgegeven
+          chart_range:
+            repeated: is meer dan één keer verzonden
+            unknown: is geen herkend tijdsbereik
+          chart_start:
+            invalid: moet een geldige datum en tijd zijn
+            nonexistent: bestaat niet vanwege een tijdzonewijziging
+            repeated: is meer dan één keer verzonden
+            required: is verplicht wanneer een eindtijd is opgegeven
+          chart_time_zone:
+            invalid: is geen herkende tijdzone
+            repeated: is meer dan één keer verzonden
         open_time_ranges: Tijdsbereiken voor prestaties openen
         quick_ranges: Snelle bereiken
         range_options:

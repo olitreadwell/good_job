@@ -255,6 +255,26 @@ en:
         custom_range: Custom
         custom_range_hint: drag on chart
         end_time: End time
+        errors:
+          base:
+            malformed: The submitted time range could not be understood.
+          chart_end:
+            after_start: must be after the start time
+            invalid: must be a valid date and time
+            nonexistent: does not exist because of a time zone change
+            repeated: was submitted more than once
+            required: is required when a start time is given
+          chart_range:
+            repeated: was submitted more than once
+            unknown: is not a recognized time range
+          chart_start:
+            invalid: must be a valid date and time
+            nonexistent: does not exist because of a time zone change
+            repeated: was submitted more than once
+            required: is required when an end time is given
+          chart_time_zone:
+            invalid: is not a recognized time zone
+            repeated: was submitted more than once
         open_time_ranges: Open performance time ranges
         quick_ranges: Quick ranges
         range_options:

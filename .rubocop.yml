@@ -135,6 +135,10 @@ RSpec/NestedGroups:
 RSpec/Output:
   Enabled: false
 
+# :unprocessable_content is unknown to Rack < 3.1, which backs Rails <= 7.1 in the CI matrix.
+RSpecRails/HttpStatusNameConsistency:
+  Enabled: false
+
 Style/Documentation:
   Enabled: false
 

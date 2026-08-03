@@ -95,7 +95,7 @@ module GoodJob
           interval_seconds: @range.interval_seconds,
           range_end: @range.canonical_timestamp(@range.end_time),
           range_start: @range.canonical_timestamp(@range.start_time),
-          timestamp_label_style: @range.label_style,
+          timestamp_intl_options: @range.timestamp_intl_options,
           time_series: true,
           timestamps: timestamps,
         },

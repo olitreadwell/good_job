@@ -93,7 +93,7 @@ RSpec.describe GoodJob::PerformanceController do
   end
 
   describe "unsafe timestamp input" do
-    it "canonicalizes repeated scalar parameters once and renders without a query exception" do
+    it "renders a validation error for repeated scalar parameters instead of guessing" do
       query_string = URI.encode_www_form([
                                            ["chart_start", "2024-01-01T10:00:00Z"],
                                            ["chart_start", "2024-01-01T10:30:00Z"],
@@ -102,28 +102,20 @@ RSpec.describe GoodJob::PerformanceController do
 
       get "#{good_job.performance_index_path}?#{query_string}"
 
-      expect(response).to redirect_to(good_job.performance_index_path(locale: nil))
-
-      follow_redirect!
-
-      expect(response).to have_http_status(:ok)
+      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response.body).to include("Performance")
     end
 
-    it "strips transient timezone state without changing exact endpoints" do
+    it "renders a validation error for an unresolvable timezone without changing exact endpoints" do
       get good_job.performance_index_path, params: {
         chart_start: "2024-01-01T10:03:17Z",
         chart_end: "2024-01-01T11:07:42Z",
         chart_time_zone: "Missing/Zone",
       }
 
-      redirect_uri = URI.parse(response.location)
-
-      expect(response).to have_http_status(:redirect)
-      expect(redirect_uri.path).to eq(good_job.performance_index_path(locale: nil))
-      expect(Rack::Utils.parse_query(redirect_uri.query)).to eq(
-        "chart_start" => "2024-01-01T10:03:17Z",
-        "chart_end" => "2024-01-01T11:07:42Z"
-      )
+      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response.body).to include("2024-01-01T10:03:17")
+      expect(response.body).to include("2024-01-01T11:07:42")
     end
 
     it "redirects reserved URL input to exact trusted index and show destinations" do
@@ -131,20 +123,35 @@ RSpec.describe GoodJob::PerformanceController do
         good_job.performance_index_path,
         good_job.performance_path("ExampleJob"),
       ].each do |path|
-        hostile_query = reserved_url_options.merge(chart_start: "not-a-time").to_query
+        hostile_query = reserved_url_options.merge(
+          chart_start: "2024-01-01T10:03:17",
+          chart_end: "2024-01-01T11:03:17"
+        ).to_query
         get "#{path}?#{hostile_query}"
 
         redirect_uri = URI.parse(response.location)
 
         expect(response).to have_http_status(:redirect)
-        expect(response.location).to eq("http://www.example.com#{path}?locale=de")
         expect(redirect_uri.scheme).to eq("http")
         expect(redirect_uri.host).to eq("www.example.com")
         expect(redirect_uri.port).to eq(80)
         expect(redirect_uri.path).to eq(path)
-        expect(Rack::Utils.parse_query(redirect_uri.query)).to eq("locale" => "de")
         expect(redirect_uri.fragment).to be_nil
       end
+    end
+
+    it "does not leak reserved URL input into rendered links when the submission is invalid" do
+      hostile_query = reserved_url_options.merge(chart_start: "not-a-time").to_query
+
+      get "#{good_job.performance_index_path}?#{hostile_query}"
+
+      expect(response).to have_http_status(:unprocessable_entity)
+      page = Capybara.string(response.body)
+      links = page.all("a[href]").pluck(:href)
+
+      expect(links).to all(satisfy("not reflect the hostile host/port/protocol") do |href|
+        href.exclude?("attacker.example") && href.exclude?("8443") && href.exclude?("https")
+      end)
     end
   end
 
