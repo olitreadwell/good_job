@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require 'concurrent/atomic/event'
-
 module GoodJob # :nodoc:
   #
   # Runs a single {GoodJob::Capsule} inside a subprocess forked by a
@@ -30,7 +28,8 @@ module GoodJob # :nodoc:
       @index = index
       @supervisor_pid = supervisor_pid
       @readiness_writer = readiness_writer
-      @stop_subprocess = Concurrent::Event.new
+      @self_pipe_reader, @self_pipe_writer = IO.pipe
+      @stopped = false
     end
 
     # Boots the Capsule and blocks until the subprocess is told to shut down (via
@@ -50,8 +49,8 @@ module GoodJob # :nodoc:
 
       Kernel.loop do
         report_readiness
-        @stop_subprocess.wait(CHECK_INTERVAL)
-        break if @stop_subprocess.set? || @capsule.shutdown? || orphaned?
+        wait_for_wakeup
+        break if @stopped || @capsule.shutdown? || orphaned?
       end
 
       # Emit the shutdown notification *before* draining, so it is recorded even
@@ -95,8 +94,35 @@ module GoodJob # :nodoc:
     # @return [void]
     def install_signal_handlers
       %w[INT TERM].each do |signal|
-        trap(signal) { Thread.new { @stop_subprocess.set }.join }
+        trap(signal) { wake }
       end
+    end
+
+    # Wakes the run loop by writing to the self-pipe. Safe to call from a
+    # +trap+ handler: a bare +IO#write_nonblock+ acquires no Ruby mutex, unlike
+    # +Concurrent::Event#set+ (which raises "can't be called from trap
+    # context") — see {GoodJob::Supervisor#wake}.
+    # @return [void]
+    def wake
+      @stopped = true
+      @self_pipe_writer.write_nonblock(".", exception: false)
+    rescue IOError
+      nil
+    end
+
+    # Blocks until the self-pipe becomes readable (a signal arrived) or
+    # +CHECK_INTERVAL+ elapses, then drains anything buffered in the pipe.
+    # @return [void]
+    def wait_for_wakeup
+      IO.select([@self_pipe_reader], nil, nil, CHECK_INTERVAL)
+      drain_self_pipe
+    end
+
+    # @return [void]
+    def drain_self_pipe
+      loop { @self_pipe_reader.read_nonblock(256) }
+    rescue IO::WaitReadable, IOError
+      nil
     end
 
     # @return [Boolean] Whether the supervisor that forked this subprocess is gone.
