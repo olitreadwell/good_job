@@ -475,4 +475,16 @@ RSpec.describe GoodJob::Configuration do
       expect(GoodJob.logger).to have_received(:warn).with(/ignored/)
     end
   end
+
+  describe '#flattened_queue_string' do
+    it 'rewrites pipe-delimited subprocess pools as semicolon-delimited scheduler groups' do
+      configuration = described_class.new({ queues: 'elephant:2 | mice:3' })
+      expect(configuration.flattened_queue_string).to eq('elephant:2;mice:3')
+    end
+
+    it 'is unchanged when there are no pipe-delimited pools' do
+      configuration = described_class.new({ queues: 'default,-mailers:2;mice:3' })
+      expect(configuration.flattened_queue_string).to eq('default,-mailers:2;mice:3')
+    end
+  end
 end

@@ -74,8 +74,10 @@ module GoodJob # :nodoc:
       return unless @readiness_writer && ready?
 
       @readiness_writer.write_nonblock(READY_HEARTBEAT, exception: false)
-    rescue IOError
+    rescue IOError, Errno::EPIPE
       # The supervisor closed its end (it is shutting down); stop heartbeating.
+      # A closed read end raises Errno::EPIPE, which is not an IOError, and would
+      # otherwise escape #run and skip this subprocess's graceful drain.
       @readiness_writer = nil
     end
 

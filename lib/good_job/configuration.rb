@@ -203,6 +203,15 @@ module GoodJob
       end
     end
 
+    # The queue configuration with each pipe-delimited subprocess pool rewritten as
+    # a +;+-delimited scheduler group, so that a single process can serve every pool.
+    # A +|+ means nothing to the queue parser, so {MultiScheduler} builds its
+    # schedulers from this rather than from {#queue_string}.
+    # @return [String]
+    def flattened_queue_string
+      queue_pools.join(';')
+    end
+
     # Describes which queues to execute jobs from and how those queues should
     # be grouped into {Scheduler} instances. See
     # {file:README.md#optimize-queues-threads-and-processes} for more details

@@ -121,9 +121,26 @@ module GoodJob
     # @!macro notification_responder
     def cluster_reap(event)
       pid = event.payload[:pid]
+      status = event.payload[:status]
+      signal = event.payload[:signal]
 
       info do
-        "GoodJob supervisor reaped subprocess (PID: #{pid})."
+        exit_description = if signal
+                             "signal: #{::Signal.signame(signal) || signal}"
+                           else
+                             "exit status: #{status.inspect}"
+                           end
+        "GoodJob supervisor reaped subprocess (PID: #{pid}, #{exit_description})."
+      end
+    end
+
+    # @!macro notification_responder
+    def cluster_backoff(event)
+      restart_count = event.payload[:restart_count]
+      delay = event.payload[:delay]
+
+      warn do
+        "GoodJob supervisor is delaying the replacement of a repeatedly exiting subprocess by #{delay} seconds (consecutive unhealthy exits: #{restart_count})."
       end
     end
 

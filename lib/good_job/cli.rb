@@ -120,6 +120,13 @@ module GoodJob
       Daemon.new(pidfile: configuration.pidfile).daemonize if configuration.daemonize?
 
       if configuration.cluster?
+        # A subprocess that exited because it was idle would just be replaced.
+        if configuration.idle_timeout
+          GoodJob.logger.warn(
+            "GoodJob's idle_timeout is not supported in cluster mode (subprocesses: #{configuration.subprocesses}) and will be ignored."
+          )
+        end
+
         # In cluster mode the supervisor forks and supervises subprocesses,
         # each running its own capsule; it runs no capsule itself. The
         # supervisor owns its own signal handling and blocks until shut down.
@@ -130,8 +137,10 @@ module GoodJob
         return
       elsif configuration.subprocesses >= 1
         GoodJob.logger.warn(
-          "GOOD_JOB_SUBPROCESSES was set to #{configuration.subprocesses}, but this platform does not support forking; GoodJob will run in a single process."
+          "GoodJob was configured to run #{configuration.subprocesses} subprocesses, but this platform does not support forking; GoodJob will run in a single process."
         )
+        # {MultiScheduler} flattens the pools into `;`-delimited scheduler groups this process serves.
+        GoodJob.logger.warn("GoodJob will run every queue pool in a single process as \"#{configuration.flattened_queue_string}\".") if configuration.flattened_queue_string != configuration.queue_string
       end
 
       capsule = GoodJob.capsule

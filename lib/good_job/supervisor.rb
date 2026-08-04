@@ -129,15 +129,15 @@ module GoodJob # :nodoc:
 
       ActiveSupport::Notifications.instrument("cluster_start.good_job", { subprocesses: @configuration.subprocesses })
       @configuration.subprocess_configs.each_with_index { |config, index| spawn_subprocess(config, index: index) }
-      # Bind the probe port only after the initial subprocesses are forked so
-      # they don't inherit the listening socket. (Replacement subprocesses forked
-      # later transiently inherit it, but never serve it and release it on exit.)
+      # Bind the probe port only after the initial subprocesses are forked so they
+      # don't inherit the listening socket. Replacements forked later do inherit it,
+      # and close it immediately (see {#spawn_subprocess}).
       start_probe_server
 
       supervise
     ensure
       stop_probe_server
-      restore_signal_handlers
+      reset_signal_handlers
       # By now every subprocess has been reaped (and its reader closed); close any
       # that remain defensively so no descriptor leaks. Iterate a snapshot of the
       # keys since forget_subprocess mutates the hash.
@@ -216,8 +216,19 @@ module GoodJob # :nodoc:
       # use for them and must close them so it never keeps a sibling's pipe open.
       inherited_readers = @subprocesses.values.map(&:readiness_reader)
       pid = fork do
+        # +fork+ preserves signal handlers, so the child would otherwise run the
+        # supervisor's handlers until {GoodJob::Subprocess} installs its own
+        # (which happens only after its Capsule has booted). Those handlers
+        # mutate supervisor state that nothing in the child reads, so an
+        # INT/TERM arriving mid-boot would be silently swallowed and the child
+        # would never shut down.
+        reset_signal_handlers
         readiness_reader.close
         inherited_readers.each { |reader| reader.close unless reader.closed? }
+        # A replacement fork inherits the probe server's listening socket, which it
+        # never serves; left open it would keep the port bound for this subprocess's
+        # whole life, outliving a supervisor that died without releasing it.
+        @probe_server&.close_socket
         GoodJob::Subprocess.new(configuration: recipe, index: index, supervisor_pid: supervisor_pid, readiness_writer: readiness_writer).run
       rescue StandardError => e
         GoodJob._on_thread_error(e)
@@ -243,7 +254,7 @@ module GoodJob # :nodoc:
         break unless pid
 
         handle = forget_subprocess(pid)
-        ActiveSupport::Notifications.instrument("cluster_reap.good_job", { pid: pid, status: status&.exitstatus })
+        ActiveSupport::Notifications.instrument("cluster_reap.good_job", { pid: pid, status: status&.exitstatus, signal: status&.termsig })
         next if @stopped || handle.nil?
 
         restart_count = restart_count_after(handle)
@@ -489,8 +500,11 @@ module GoodJob # :nodoc:
       nil
     end
 
+    # Resets every signal the supervisor traps back to its default disposition.
+    # Used both when the supervisor exits and immediately after a +fork+, so that
+    # a child never inherits and runs the supervisor's handlers.
     # @return [void]
-    def restore_signal_handlers
+    def reset_signal_handlers
       (GRACEFUL_SIGNALS + IMMEDIATE_SIGNALS + %w[CHLD]).each do |signal|
         trap(signal, "DEFAULT")
       rescue ArgumentError

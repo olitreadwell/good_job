@@ -32,6 +32,7 @@ module GoodJob
     end
 
     def start
+      @handler.listen
       @future = @handler.build_future
       @future.add_observer(self.class, :task_observer)
       @future.execute
@@ -44,6 +45,12 @@ module GoodJob
     def stop
       @handler&.stop
       @future&.value # wait for Future to exit
+    end
+
+    # Closes this process's copy of the listening socket without stopping the server,
+    # for a process that inherited it across a +fork+ (see {GoodJob::Supervisor}).
+    def close_socket
+      @handler&.close_socket
     end
 
     def build_handler(port:, handler:, app:)

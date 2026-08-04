@@ -178,12 +178,39 @@ RSpec.describe GoodJob::CLI do
           expect(supervisor).to have_received(:start)
           expect(capsule_mock).not_to have_received(:start)
         end
+
+        context 'when an idle_timeout is also configured' do
+          before do
+            allow(GoodJob).to receive(:configuration).and_return(GoodJob::Configuration.new({ subprocesses: 2, idle_timeout: 30 }))
+          end
+
+          it 'warns that idle_timeout is unsupported rather than silently ignoring it' do
+            allow(GoodJob.logger).to receive(:warn)
+
+            cli = described_class.new([], {}, {})
+            cli.start
+
+            expect(GoodJob.logger).to have_received(:warn).with(/idle_timeout is not supported in cluster mode/)
+            expect(supervisor).to have_received(:start)
+          end
+        end
+
+        it 'does not warn about idle_timeout when none is configured' do
+          allow(GoodJob.logger).to receive(:warn)
+
+          cli = described_class.new([], {}, {})
+          cli.start
+
+          expect(GoodJob.logger).not_to have_received(:warn).with(/idle_timeout/)
+        end
       end
 
       context 'when subprocesses is set but fork is unavailable' do
+        let(:configuration) { GoodJob::Configuration.new({ subprocesses: 2 }) }
+
         before do
           allow(Kernel).to receive(:loop)
-          allow(GoodJob).to receive(:configuration).and_return(GoodJob::Configuration.new({ subprocesses: 2 }))
+          allow(GoodJob).to receive(:configuration).and_return(configuration)
           allow(Process).to receive(:respond_to?).and_call_original
           allow(Process).to receive(:respond_to?).with(:fork).and_return(false)
         end
@@ -196,6 +223,20 @@ RSpec.describe GoodJob::CLI do
 
           expect(GoodJob.logger).to have_received(:warn).with(/does not support forking/)
           expect(capsule_mock).to have_received(:start)
+        end
+
+        context 'when the queues are pipe-delimited subprocess pools' do
+          let(:configuration) { GoodJob::Configuration.new({ queues: 'elephant:2|mice:3' }) }
+
+          it 'warns that every pool will run in this one process' do
+            allow(GoodJob.logger).to receive(:warn)
+
+            cli = described_class.new([], {}, {})
+            cli.start
+
+            expect(GoodJob.logger).to have_received(:warn).with(/every queue pool in a single process/)
+            expect(capsule_mock).to have_received(:start)
+          end
         end
       end
     end

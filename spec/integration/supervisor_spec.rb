@@ -125,6 +125,47 @@ RSpec.describe 'Cluster mode', :skip_if_java do
     end
   end
 
+  it 'does not let a replacement subprocess keep the probe port bound after the supervisor dies' do
+    port = 7006
+    ShellOut.command("bundle exec good_job start", env: env.merge("GOOD_JOB_PROBE_PORT" => port.to_s)) do |shell|
+      original_pids = nil
+      wait_until(max: 30, increments_of: 0.5) do
+        original_pids = booted_subprocess_pids(shell.output)
+        expect(original_pids.size).to eq(2)
+      end
+      supervisor_pid = supervisor_pid_for(original_pids.first)
+
+      wait_until(max: 30, increments_of: 0.5) do
+        response = begin
+          Net::HTTP.get_response(URI("http://127.0.0.1:#{port}/status"))
+        rescue Errno::ECONNREFUSED, Errno::ECONNRESET, Net::ReadTimeout, EOFError
+          nil # probe server still binding
+        end
+        expect(response&.code).to eq("200")
+      end
+
+      # Force a replacement fork, which inherits the already-bound listening socket.
+      Process.kill("TERM", original_pids.first)
+      wait_until(max: 30, increments_of: 0.5) do
+        expect(booted_subprocess_pids(shell.output) - original_pids).not_to be_empty
+      end
+
+      # SIGKILL, so the supervisor never stops its own probe server. The replacement
+      # subprocess stays alive until it notices it is orphaned (CHECK_INTERVAL, 5s).
+      Process.kill("KILL", supervisor_pid)
+
+      wait_until(max: 3, increments_of: 0.25) do
+        bindable = begin
+          TCPServer.new('0.0.0.0', port).close
+          true
+        rescue Errno::EADDRINUSE
+          false
+        end
+        expect(bindable).to be true
+      end
+    end
+  end
+
   it 'gracefully shuts its subprocesses down when it is terminated' do
     ShellOut.command("bundle exec good_job start", env: env) do |shell|
       pids = nil
@@ -138,6 +179,29 @@ RSpec.describe 'Cluster mode', :skip_if_java do
       wait_until(max: 30, increments_of: 0.5) do
         expect(shell.output).to include(/shutting down subprocess/)
         expect(shell.output).to include(/shutting down scheduler/)
+        expect(shell.output).to include(/supervisor is shut down/)
+      end
+    end
+  end
+
+  it 'shuts down when it is terminated while its subprocesses are still booting' do
+    # A forked subprocess must not inherit the supervisor's signal handlers: they
+    # mutate supervisor state that nothing in the subprocess reads, so this TERM
+    # would be swallowed and the supervisor (with the default shutdown_timeout of
+    # -1, i.e. wait forever) would block forever on a subprocess that never exits.
+    # The boot delay hook holds the subprocesses inside their boot hook, before
+    # they have installed their own signal handlers.
+    booting_env = env.except("GOOD_JOB_SHUTDOWN_TIMEOUT").merge("GOOD_JOB_TEST_SUBPROCESS_BOOT_DELAY" => "15")
+    ShellOut.command("bundle exec good_job start", env: booting_env) do |shell|
+      booting_pid = nil
+      wait_until(max: 30, increments_of: 0.5) do
+        booting_pid = shell.output.join[/subprocess_boot_delay PID=(\d+)/, 1]
+        expect(booting_pid).to be_present
+      end
+
+      Process.kill("TERM", supervisor_pid_for(booting_pid.to_i))
+
+      wait_until(max: 30, increments_of: 0.5) do
         expect(shell.output).to include(/supervisor is shut down/)
       end
     end
