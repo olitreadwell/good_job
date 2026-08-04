@@ -57,6 +57,53 @@ RSpec.describe GoodJob::Configuration do
     end
   end
 
+  describe '#max_threads' do
+    it 'defaults to 5' do
+      stub_const 'ENV', ENV.to_hash.except('GOOD_JOB_MAX_THREADS', 'RAILS_MAX_THREADS')
+      configuration = described_class.new({})
+      expect(configuration.max_threads).to eq 5
+    end
+
+    context 'when option is given' do
+      it 'uses option value' do
+        configuration = described_class.new({ max_threads: 4 })
+        expect(configuration.max_threads).to eq 4
+      end
+    end
+
+    context 'when rails config is set' do
+      it 'uses rails config value' do
+        allow(Rails.application.config).to receive(:good_job).and_return({ max_threads: 6 })
+        configuration = described_class.new({})
+        expect(configuration.max_threads).to eq 6
+      end
+    end
+
+    context 'when GOOD_JOB_MAX_THREADS is set' do
+      it 'uses the environment variable' do
+        stub_const 'ENV', ENV.to_hash.merge({ 'GOOD_JOB_MAX_THREADS' => '7' })
+        configuration = described_class.new({})
+        expect(configuration.max_threads).to eq 7
+      end
+    end
+
+    context 'when only RAILS_MAX_THREADS is set' do
+      it 'falls back to RAILS_MAX_THREADS' do
+        stub_const 'ENV', ENV.to_hash.except('GOOD_JOB_MAX_THREADS').merge({ 'RAILS_MAX_THREADS' => '8' })
+        configuration = described_class.new({})
+        expect(configuration.max_threads).to eq 8
+      end
+    end
+
+    context 'when both GOOD_JOB_MAX_THREADS and RAILS_MAX_THREADS are set' do
+      it 'prefers GOOD_JOB_MAX_THREADS' do
+        stub_const 'ENV', ENV.to_hash.merge({ 'GOOD_JOB_MAX_THREADS' => '9', 'RAILS_MAX_THREADS' => '2' })
+        configuration = described_class.new({})
+        expect(configuration.max_threads).to eq 9
+      end
+    end
+  end
+
   describe '#cleanup_discarded_jobs?' do
     it 'defaults to true' do
       configuration = described_class.new({})
