@@ -170,6 +170,19 @@ RSpec.describe GoodJob::CLI do
           allow(GoodJob::Supervisor).to receive(:new).and_return(supervisor)
         end
 
+        it 'notifies systemd when the supervisor begins shutting down, not once it has finished' do
+          systemd = instance_double GoodJob::SystemdService, start: nil, stopping: nil, stop: nil
+          allow(GoodJob::SystemdService).to receive(:new).and_return systemd
+          # The supervisor blocks until every subprocess has drained, so it hands
+          # back the start of the shutdown via this callback.
+          allow(supervisor).to receive(:start) { |on_shutdown:| on_shutdown.call }
+
+          cli = described_class.new([], {}, {})
+          cli.start
+
+          expect(systemd).to have_received(:stopping)
+        end
+
         it 'starts a supervisor instead of the capsule' do
           cli = described_class.new([], {}, {})
           cli.start

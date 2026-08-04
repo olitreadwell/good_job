@@ -66,6 +66,32 @@ RSpec.describe GoodJob::Supervisor do
     end
   end
 
+  describe '#backoff' do
+    def elapsed
+      started_at = described_class.monotonic
+      yield
+      described_class.monotonic - started_at
+    end
+
+    it 'waits out the delay when no shutdown signal is pending' do
+      duration = elapsed { supervisor.send(:backoff, 2) } # a 1 second delay
+
+      expect(duration).to be >= 1
+      expect(supervisor.instance_variable_get(:@stopped)).to be false
+    end
+
+    it 'does not wait when a shutdown signal arrived before the delay began' do
+      # The signal's self-pipe wakeup is discarded by #backoff, so the queued
+      # signal itself is what must cut the wait short.
+      supervisor.instance_variable_get(:@received_signals) << 'TERM'
+
+      duration = elapsed { supervisor.send(:backoff, 50) } # a 30 second delay
+
+      expect(duration).to be < 1
+      expect(supervisor.instance_variable_get(:@stopped)).to be true
+    end
+  end
+
   describe '#restart_count_after' do
     it 'increments the count for a subprocess that exited before it was healthy' do
       handle = GoodJob::Supervisor::SubprocessHandle.new(pid: 1, recipe: :r, restart_count: 2)
@@ -160,6 +186,58 @@ RSpec.describe GoodJob::Supervisor do
       supervisor.instance_variable_get(:@subprocesses).delete(111)
 
       expect(supervisor.connected?).to be false
+    end
+  end
+
+  describe '#start_probe_server' do
+    let(:configuration) { GoodJob::Configuration.new({ subprocesses: 2, probe_port: 7010 }) }
+
+    before { allow(GoodJob::ProbeServer).to receive(:new).and_return(instance_double(GoodJob::ProbeServer, start: nil)) }
+
+    it 'serves the cluster health check app' do
+      supervisor.send(:start_probe_server)
+
+      expect(GoodJob::ProbeServer).to have_received(:new).with(hash_including(port: 7010, app: an_instance_of(Rack::Builder)))
+    end
+
+    it 'serves a configured probe_app instead of the cluster health check app' do
+      probe_app = ->(_env) { [200, {}, ["custom"]] }
+      allow(configuration).to receive(:probe_app).and_return(probe_app)
+
+      supervisor.send(:start_probe_server)
+
+      expect(GoodJob::ProbeServer).to have_received(:new).with(hash_including(app: probe_app))
+    end
+
+    it 'does not start a probe server when no port is configured' do
+      allow(configuration).to receive(:probe_port).and_return(nil)
+
+      supervisor.send(:start_probe_server)
+
+      expect(GoodJob::ProbeServer).not_to have_received(:new)
+    end
+  end
+
+  describe '#supervise' do
+    it 'invokes the on_shutdown callback before the subprocesses are told to drain' do
+      supervisor.instance_variable_set(:@stopped, true)
+      events = []
+      allow(supervisor).to receive(:terminate_subprocesses) { events << :terminate }
+
+      supervisor.send(:supervise, on_shutdown: -> { events << :on_shutdown })
+
+      expect(events).to eq(%i[on_shutdown terminate])
+    end
+
+    it 'reports an error from the callback and still shuts down' do
+      supervisor.instance_variable_set(:@stopped, true)
+      allow(GoodJob).to receive(:_on_thread_error)
+      allow(supervisor).to receive(:terminate_subprocesses)
+
+      supervisor.send(:supervise, on_shutdown: -> { raise "boom" })
+
+      expect(GoodJob).to have_received(:_on_thread_error).with(an_instance_of(RuntimeError))
+      expect(supervisor).to have_received(:terminate_subprocesses)
     end
   end
 end

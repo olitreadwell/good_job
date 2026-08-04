@@ -121,8 +121,13 @@ module GoodJob # :nodoc:
     # Forks the configured number of subprocesses and blocks, supervising them,
     # until a shutdown signal (+SIGINT+/+SIGTERM+ for graceful, +SIGQUIT+ for
     # immediate) is received. When it returns, all subprocesses have exited.
+    # @param on_shutdown [#call, nil] Called once, after a shutdown signal is
+    #   received and immediately before the subprocesses are told to drain, so a
+    #   caller can act on the start of the shutdown rather than only its
+    #   completion. An error raised by it is reported and does not prevent the
+    #   shutdown.
     # @return [void]
-    def start
+    def start(on_shutdown: nil)
       @supervisor_pid = ::Process.pid
       $PROGRAM_NAME = "good_job supervisor [#{@configuration.subprocesses} subprocesses]"
       install_signal_handlers
@@ -134,7 +139,7 @@ module GoodJob # :nodoc:
       # and close it immediately (see {#spawn_subprocess}).
       start_probe_server
 
-      supervise
+      supervise(on_shutdown: on_shutdown)
     ensure
       stop_probe_server
       reset_signal_handlers
@@ -177,14 +182,21 @@ module GoodJob # :nodoc:
 
     # The main supervise loop. Runs on the calling (main) thread so that all
     # forking happens on the main thread.
+    # @param on_shutdown [#call, nil] See {#start}.
     # @return [void]
-    def supervise
+    def supervise(on_shutdown: nil)
       until @stopped
         process_signals
         break if @stopped
 
         reap_and_replace
         wait_for_wakeup
+      end
+
+      begin
+        on_shutdown&.call
+      rescue StandardError => e
+        GoodJob._on_thread_error(e)
       end
 
       terminate_subprocesses(@shutdown_timeout.nil? ? @configuration.shutdown_timeout : @shutdown_timeout)
@@ -287,6 +299,13 @@ module GoodJob # :nodoc:
 
       ActiveSupport::Notifications.instrument("cluster_backoff.good_job", { restart_count: restart_count, delay: delay })
       drain_self_pipe # discard stale wakeups so the delay is real
+      # Draining also discards the wakeup a shutdown signal wrote, so process the
+      # signals themselves (the authoritative record) before waiting; otherwise a
+      # signal that arrived just before the drain would go unnoticed for the
+      # entire delay.
+      process_signals
+      return if @stopped
+
       IO.select([@self_pipe_reader], nil, nil, delay)
       process_signals
     end
@@ -406,7 +425,9 @@ module GoodJob # :nodoc:
     end
 
     # Binds the probe/health-check port (in the supervisor process only) with a
-    # cluster-aware Rack app. No-op unless a probe port is configured.
+    # cluster-aware Rack app. A configured +probe_app+ replaces it entirely, just
+    # as it replaces the single-process health-check app. No-op unless a probe
+    # port is configured.
     # @return [void]
     def start_probe_server
       return unless @configuration.probe_port
@@ -414,7 +435,7 @@ module GoodJob # :nodoc:
       @probe_server = GoodJob::ProbeServer.new(
         port: @configuration.probe_port,
         handler: @configuration.probe_handler,
-        app: GoodJob::ProbeServer.cluster_app(self)
+        app: @configuration.probe_app || GoodJob::ProbeServer.cluster_app(self)
       )
       @probe_server.start
     end

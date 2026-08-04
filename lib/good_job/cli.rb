@@ -130,9 +130,12 @@ module GoodJob
         # In cluster mode the supervisor forks and supervises subprocesses,
         # each running its own capsule; it runs no capsule itself. The
         # supervisor owns its own signal handling and blocks until shut down.
+        # It returns only once every subprocess has drained, so systemd is
+        # notified from the supervisor's shutdown callback instead — otherwise
+        # systemd would not learn of the shutdown until it had already finished.
         supervisor = GoodJob::Supervisor.new(configuration)
         systemd.start
-        supervisor.start
+        supervisor.start(on_shutdown: -> { systemd.stopping })
         systemd.stop
         return
       elsif configuration.subprocesses >= 1
