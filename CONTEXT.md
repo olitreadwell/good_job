@@ -27,4 +27,4 @@
 - `2026-08-26` test-coverage (Configuration#max_threads) — pr-opened — fork PR #2 (audit-gate updated).
 
 ## Mined gaps (discovered, not yet attempted)
-- `2026-09-08` trivial/minor-fix pass (typos, dead links, stale commands, wrong doc lines) — status: proposed.
+- `2026-09-08` trivial/minor-fix pass (typos, dead links, stale commands, wrong doc lines) — pr-opened — fork PR #4 (6 README.md doc fixes + 1 dead Twitter link in KUDOS.md; 2 files, 11+/11-). Fork CI: Lint + Tests for Development and Demo green; full test matrix red today due to environmental `unknown keyword: quirks_mode` (json gem 2.8.0) affecting ALL PRs incl. upstream's own — not caused by docs-only diff.
