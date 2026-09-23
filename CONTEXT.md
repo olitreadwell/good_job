@@ -1,5 +1,5 @@
 # bensheldon/good_job context
-> refreshed 2026-09-08 | upstream default: main @ 2d8ebb19120296a823c41a43b2945a09df719a7b
+> refreshed 2026-09-24 | upstream default: main @ c83ab77e6fad34daf2b9b32f44e7ab8b427a3ebe
 
 ## Identity & policies
 - upstream: bensheldon/good_job, default branch `main`, primary language Ruby (Rails gem), English-first (yes — all docs/README in English).
@@ -20,11 +20,13 @@
 - Areas in flight: cluster mode (#1801/#1803), fiber execution (#1811), dashboard query optimization (#1800), queue-scoped index (#1810).
 
 ## Issue-area health
-- Active, well-maintained. No contested/redesign signals in docs area.
+- Active, well-maintained. No contested/redesign signals in docs area. No small maintainer-engaged open bug survives for a first fork PR; remaining open issues are large features/complex.
 
 ## Gap ledger (dedupe — READ FIRST, never re-pick)
 - `2026-08-05` test-coverage (Configuration#max_threads) — pr-opened-green — fork PR #1.
 - `2026-08-26` test-coverage (Configuration#max_threads) — pr-opened — fork PR #2 (audit-gate updated).
+- `2026-09-08` trivial/minor-fix pass (typos, dead links, stale commands, wrong doc lines) — pr-opened — fork PR #4 (8 verified doc fixes in README.md + KUDOS.md across 2 commits; 2 files). Fork CI: Lint + Tests for Development and Demo + rails_head + JRuby green; older-Rails matrix (6.1/7.0/7.1) red due to pre-existing environmental `unknown keyword: quirks_mode` (json gem 2.8.0), now pinned by upstream #1817.
+- `2026-09-24` OverridableConnection unit spec — DROPPED (test design error: a stubbed `super` in a fake subclass resolves to AR's connection, not the stub; 5 failures). Not a real bug — do not re-pick.
 
 ## Mined gaps (discovered, not yet attempted)
-- `2026-09-08` trivial/minor-fix pass (typos, dead links, stale commands, wrong doc lines) — pr-opened — fork PR #4 (8 verified doc fixes in README.md + KUDOS.md across 2 commits: execeution→execution, probe_server_app→probe_app, enequeued→enqueued, stray `]` in mermaid labels, Performance→Pauses page, dead KUDOS Twitter link, TOC anchor case, duplicated 'can no longer can' word; 2 files). Fork CI: Lint + Tests for Development and Demo + rails_head + JRuby green; older-Rails matrix (6.1/7.0/7.1) red due to pre-existing environmental `unknown keyword: quirks_mode` (json gem 2.8.0) — unrelated to docs-only diff.
+- `2026-09-24` test-coverage (GoodJob::Execution model) — no dedicated model spec exists for Execution; public API (#number, #queue_latency, #runtime_latency, #last_status_at, #status, #interrupted_duration, #display_serialized_params, #filtered_error_backtrace) drives dashboard views and jobs#executions. Proposed: add spec/app/models/good_job/execution_spec.rb. Dedupe: no upstream execution_spec.rb; no open/merged upstream PR covering it. — status: proposed
