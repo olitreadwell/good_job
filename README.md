@@ -517,7 +517,7 @@ As a second example, you may wish to show a link to a log aggregator next to eac
 
 Smaller `priority` values have higher priority and run first (default: `0`), in accordance with [Active Job's definition of priority](https://github.com/rails/rails/blob/e17faead4f2aff28da079d50f02ea5b015322d5b/activejob/lib/active_job/core.rb#L22).
 
-Prior to GoodJob v4, this was reversed: higher priority numbers ran first in all versions of GoodJob v3.x and below. When migrating from v3 to v4, new behavior can be opted into by setting `config.good_job.smaller_number_is_higher_priority = true` in your GoodJob initializer or `application.rb`.
+This is a change from GoodJob v4: in all versions of GoodJob v3.x and below, higher priority numbers ran first. During early GoodJob v4 releases, a `smaller_number_is_higher_priority` configuration option controlled this behavior, but it was removed in v4.1.1. In current versions, smaller priority values always run first and no configuration is required.
 
 ### Labelled jobs
 
