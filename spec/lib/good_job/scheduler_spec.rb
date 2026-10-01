@@ -74,7 +74,7 @@ RSpec.describe GoodJob::Scheduler do
   end
 
   describe '#shutdown' do
-    it 'shuts down the theadpools' do
+    it 'shuts down the threadpools' do
       scheduler = described_class.new(performer)
 
       expect { scheduler.shutdown }
