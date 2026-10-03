@@ -217,13 +217,10 @@ module GoodJob
   end
 
   # Destroys preserved job and batch records.
-  # By default, GoodJob destroys job records when the job is performed and this
-  # method is not necessary. However, when `GoodJob.preserve_job_records = true`,
-  # the jobs will be preserved in the database. This is useful when wanting to
-  # analyze or inspect job performance.
-  # If you are preserving job records this way, use this method regularly to
-  # destroy old records and preserve space in your database.
-  # @param older_than [nil,Numeric,ActiveSupport::Duration] Jobs older than this will be destroyed (default: +86400+).
+  # By default, GoodJob retains finished job records for 14 days and then
+  # automatically deletes them. Use this method to destroy preserved records
+  # sooner, for example to preserve space in your database.
+  # @param older_than [nil,Numeric,ActiveSupport::Duration] Jobs older than this will be destroyed (default: +GoodJob.cleanup_preserved_jobs_before_seconds_ago+, which defaults to 14 days).
   # @param include_discarded [Boolean] Whether or not to destroy discarded jobs (default: per +cleanup_discarded_jobs+ config option)
   # @return [Integer] Number of job execution records and batches that were destroyed.
   def self.cleanup_preserved_jobs(older_than: nil, in_batches_of: 1_000, include_discarded: GoodJob.configuration.cleanup_discarded_jobs?)

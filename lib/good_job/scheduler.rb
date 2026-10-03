@@ -47,7 +47,7 @@ module GoodJob # :nodoc:
     attr_accessor :lower_thread_priority
 
     # @param performer [GoodJob::JobPerformer]
-    # @param max_threads [Numeric, nil] number of seconds between polls for jobs
+    # @param max_threads [Numeric, nil] maximum number of threads to use for executing jobs
     # @param max_cache [Numeric, nil] maximum number of scheduled jobs to cache in memory
     # @param warm_cache_on_initialize [Boolean] whether to warm the cache immediately, or manually by calling +warm_cache+
     # @param cleanup_interval_seconds [Numeric, nil] number of seconds between cleaning up job records

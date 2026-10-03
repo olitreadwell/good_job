@@ -6,7 +6,7 @@ _Quotes on why you like using GoodJob. Click to edit and Github will automatical
 
     > This is a great project to support
 
-- @hackyourcity on [Twitter](https://twitter.com/hackyourcity/status/1308198278140362752): 
+- @hackyourcity on Twitter: 
 
     > Using good_job on a prototype at work @bensheldon. 👍🏼
 
