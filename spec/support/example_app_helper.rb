@@ -58,7 +58,7 @@ module ExampleAppHelper
     # newly created migrations can be run, then resets it back.
     #
     # Ideally this would happen in a different database, but that seemed like
-    # a lot of work to do in Github Actions.
+    # a lot of work to do in GitHub Actions.
     tables = %i[
       good_jobs
       good_job_batches

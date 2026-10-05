@@ -20,7 +20,7 @@ module GoodJob
     end
 
     # Checks for whether the schema is up to date.
-    # Can be overriden by child class.
+    # Can be overridden by child class.
     # @return [Boolean]
     def self.migrated?
       return true if table_exists?

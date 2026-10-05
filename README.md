@@ -61,7 +61,7 @@ For more of the story of GoodJob, read the [introductory blog post](https://isla
         - [Exceptions](#exceptions)
         - [Retries](#retries)
         - [Action Mailer retries](#action-mailer-retries)
-        - [Interrupts, graceful shutdown, and SIGKILL](#Interrupts-graceful-shutdown-and-SIGKILL)
+        - [Interrupts, graceful shutdown, and SIGKILL](#interrupts-graceful-shutdown-and-sigkill)
     - [Timeouts](#timeouts)
     - [Optimize queues, threads, and processes](#optimize-queues-threads-and-processes)
     - [Database connections](#database-connections)
@@ -198,17 +198,17 @@ Usage:
 Options:
   [--queues=QUEUE_LIST]           # Queues or pools to work from. (env var: GOOD_JOB_QUEUES, default: *)
   [--max-threads=COUNT]           # Default number of threads per pool to use for working jobs. (env var: GOOD_JOB_MAX_THREADS, default: 5)
+  [--subprocesses=COUNT]          # Number of subprocesses to fork and supervise in cluster mode. 0 runs in the current process. (env var: GOOD_JOB_SUBPROCESSES, default: 0)
   [--poll-interval=SECONDS]       # Interval between polls for available jobs in seconds (env var: GOOD_JOB_POLL_INTERVAL, default: 10)
   [--max-cache=COUNT]             # Maximum number of scheduled jobs to cache in memory (env var: GOOD_JOB_MAX_CACHE, default: 10000)
   [--shutdown-timeout=SECONDS]    # Number of seconds to wait for jobs to finish when shutting down before stopping the thread. (env var: GOOD_JOB_SHUTDOWN_TIMEOUT, default: -1 (forever))
   [--enable-cron]                 # Whether to run cron process (default: false)
-  [--enable-listen-notify]        # Whether to enqueue and read jobs with Postgres LISTEN/NOTIFY (default: true)
   [--idle-timeout=SECONDS]        # Exit process when no jobs have been performed for this many seconds (env var: GOOD_JOB_IDLE_TIMEOUT, default: nil)
   [--daemonize]                   # Run as a background daemon (default: false)
   [--pidfile=PIDFILE]             # Path to write daemonized Process ID (env var: GOOD_JOB_PIDFILE, default: tmp/pids/good_job.pid)
   [--probe-port=PORT]             # Port for http health check (env var: GOOD_JOB_PROBE_PORT, default: nil)
   [--probe-handler=PROBE_HANDLER] # Use 'webrick' to use WEBrick to handle probe server requests which is Rack compliant, otherwise default server that is not Rack compliant is used.
-  [--queue-select-limit=COUNT]    # The number of queued jobs to select when polling for a job to run. (env var: GOOD_JOB_QUEUE_SELECT_LIMIT, default: nil)"
+  [--queue-select-limit=COUNT]    # The number of queued jobs to select when polling for a job to run. (env var: GOOD_JOB_QUEUE_SELECT_LIMIT, default: 1000)
 
 Executes queued jobs.
 
@@ -236,8 +236,8 @@ Options:
 
 Manually destroys preserved job records.
 
-By default, GoodJob automatically destroys job records when the job is performed
-and this command is not required to be used.
+By default, GoodJob retains finished job records for 14 days and then
+automatically deletes them. Use this command to destroy them sooner.
 ```
 
 ### Configuration options
@@ -317,7 +317,7 @@ Available configuration options are:
 - `cleanup_interval_seconds` (integer) Number of seconds a Scheduler will wait before cleaning up preserved jobs. Defaults to `600` (10 minutes). Disable with `false`. Can also be set with  the environment variable `GOOD_JOB_CLEANUP_INTERVAL_SECONDS` and disabled with `0`).
 - `logger` ([Rails Logger](https://api.rubyonrails.org/classes/ActiveSupport/Logger.html)) lets you set a custom logger for GoodJob. It should be an instance of a Rails `Logger` (Default: `Rails.logger`).
 - `preserve_job_records` (boolean, symbol, or lambda) keeps job records in your database even after jobs are completed. If set to `true`, all job records are preserved. If set to `:on_unhandled_error`, only jobs that finished with an unhandled error are preserved. If set to a lambda, the lambda will be called with the error_event (e.g., `:discarded`, `:retry_stopped`, or `:unhandled`) and should return a boolean indicating whether to preserve the job. (Default: `true`)
-- `advisory_lock_heartbeat` (boolean) whether to use an advisory lock for the purpose of determining whether an execeution process is active. (Default `true` in Development; `false` in other environments)
+- `advisory_lock_heartbeat` (boolean) whether to use an advisory lock for the purpose of determining whether an execution process is active. (Default `true` in Development; `false` in other environments)
 - `retry_on_unhandled_error` (boolean) causes jobs to be re-queued and retried if they raise an instance of `StandardError`. Be advised this may lead to jobs being repeated infinitely ([see below for more on retries](#retries)). Instances of `Exception`, like SIGINT, will *always* be retried, regardless of this attribute’s value. (Default: `false`)
 - `on_thread_error` (proc, lambda, or callable) will be called when there is an Exception. It can be useful for logging errors to bug tracking services, like Sentry or Airbrake. Example:
 
@@ -325,7 +325,7 @@ Available configuration options are:
     config.good_job.on_thread_error = -> (exception) { Rails.error.report(exception) }
     ```
 
-- `probe_server_app` (Rack application) allows you to specify a Rack application to be used for the probe server. Defaults to `nil` which uses the default probe server. Example:
+- `probe_app` (Rack application) allows you to specify a Rack application to be used for the probe server. Defaults to `nil` which uses the default probe server. Example:
 
     ```ruby
     config.good_job.probe_app = -> (env) { [200, {}, ["OK"]] }
@@ -393,7 +393,7 @@ The following options are also configurable via accessors, but you are encourage
 
 ![Dashboard UI](https://github.com/bensheldon/good_job/raw/main/SCREENSHOT.png)
 
-_🚧 GoodJob's dashboard is a work in progress. Please contribute ideas and code on [Github](https://github.com/bensheldon/good_job/issues)._
+_🚧 GoodJob's dashboard is a work in progress. Please contribute ideas and code on [GitHub](https://github.com/bensheldon/good_job/issues)._
 
 GoodJob includes a Dashboard as a mountable `Rails::Engine`.
 
@@ -445,7 +445,7 @@ GoodJob includes a Dashboard as a mountable `Rails::Engine`.
 
 _To view finished jobs (succeeded and discarded) on the Dashboard, GoodJob must be configured to preserve job records. Preservation is enabled by default._
 
-**Troubleshooting the Dashboard:** Some applications are unable to autoload the Goodjob Engine. To work around this, explicitly require the Engine at the top of your `config/application.rb` file, immediately after Rails is required and before Bundler requires the Rails' groups.
+**Troubleshooting the Dashboard:** Some applications are unable to autoload the GoodJob Engine. To work around this, explicitly require the Engine at the top of your `config/application.rb` file, immediately after Rails is required and before Bundler requires the Rails' groups.
 
 ```ruby
 # config/application.rb
@@ -517,7 +517,7 @@ As a second example, you may wish to show a link to a log aggregator next to eac
 
 Smaller `priority` values have higher priority and run first (default: `0`), in accordance with [Active Job's definition of priority](https://github.com/rails/rails/blob/e17faead4f2aff28da079d50f02ea5b015322d5b/activejob/lib/active_job/core.rb#L22).
 
-Prior to GoodJob v4, this was reversed: higher priority numbers ran first in all versions of GoodJob v3.x and below. When migrating from v3 to v4, new behavior can be opted into by setting `config.good_job.smaller_number_is_higher_priority = true` in your GoodJob initializer or `application.rb`.
+This is a change from GoodJob v4: in all versions of GoodJob v3.x and below, higher priority numbers ran first. During early GoodJob v4 releases, a `smaller_number_is_higher_priority` configuration option controlled this behavior, but it was removed in v4.1.1. In current versions, smaller priority values always run first and no configuration is required.
 
 ### Labelled jobs
 
@@ -614,7 +614,7 @@ GoodJob's concurrency control strategy for `perform_limit` is "optimistic retry 
 - "Optimistic" meaning that the implementation's performance trade-off assumes that collisions are atypical (e.g. two users enqueue the same job at the same time) rather than regular (e.g. the system enqueues thousands of colliding jobs at the same time). Depending on your concurrency requirements, you may also want to manage concurrency through the number of GoodJob threads and processes that are performing a given queue.
 - "Retry with an incremental backoff" means that when `perform_limit` is exceeded, the job will raise a `GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError` which is caught by a `retry_on` handler which re-schedules the job to execute in the near future with an incremental backoff.
 - First-in-first-out job execution order is not preserved when a job is retried with incremental back-off.
-- For pessimistic usecases that collisions are expected, use number of threads/processes (e.g., `good_job --queues "serial:1;-serial:5"`) to control concurrency. It is also a good idea to use `perform_limit` as backstop.
+- For pessimistic use cases that collisions are expected, use number of threads/processes (e.g., `good_job --queues "serial:1;-serial:5"`) to control concurrency. It is also a good idea to use `perform_limit` as backstop.
 
 #### Legacy: `good_job_control_concurrency_with`
 
@@ -687,7 +687,7 @@ job.good_job_concurrency_key #=> "MyJob-default-Alice-v1"
 
 GoodJob can enqueue Active Job jobs on a recurring basis that can be used as a replacement for cron.
 
-Cron-style jobs can be enequeued by any GoodJob process (e.g., CLI or `:async` execution mode) that has `config.good_job.enable_cron` set to `true`. Enabling cron on multiple processes will not enqueue duplicate jobs; GoodJob's cron uses unique indexes to ensure that only a single job is enqueued for a given time interval.  In order for this to work, GoodJob must preserve cron-created job records; these records will be automatically deleted like any other preserved record.
+Cron-style jobs can be enqueued by any GoodJob process (e.g., CLI or `:async` execution mode) that has `config.good_job.enable_cron` set to `true`. Enabling cron on multiple processes will not enqueue duplicate jobs; GoodJob's cron uses unique indexes to ensure that only a single job is enqueued for a given time interval.  In order for this to work, GoodJob must preserve cron-created job records; these records will be automatically deleted like any other preserved record.
 
 Cron-format is parsed by the [`fugit`](https://github.com/floraison/fugit) gem, which has support for seconds-level resolution (e.g. `* * * * * *`) and natural language parsing (e.g. `every second`).
 
@@ -858,16 +858,16 @@ Consider a multi-stage batch with both parallel and serial job steps:
 ```mermaid
 graph TD
     0{"BatchJob\n{ stage: nil }"}
-    0 --> a["WorkJob]\n{ step: a }"]
-    0 --> b["WorkJob]\n{ step: b }"]
-    0 --> c["WorkJob]\n{ step: c }"]
+    0 --> a["WorkJob\n{ step: a }"]
+    0 --> b["WorkJob\n{ step: b }"]
+    0 --> c["WorkJob\n{ step: c }"]
     a --> 1
     b --> 1
     c --> 1
     1{"BatchJob\n{ stage: 1 }"}
-    1 --> d["WorkJob]\n{ step: d }"]
-    1 --> e["WorkJob]\n{ step: e }"]
-    e --> f["WorkJob]\n{ step: f }"]
+    1 --> d["WorkJob\n{ step: d }"]
+    1 --> e["WorkJob\n{ step: e }"]
+    e --> f["WorkJob\n{ step: f }"]
     d --> 2
     f --> 2
     2{"BatchJob\n{ stage: 2 }"}
@@ -953,7 +953,7 @@ To perform upgrades to the GoodJob database tables:
 
 #### Upgrading v3 to v4
 
-GoodJob v4 changes how job and job execution records are stored in the database; moving from job and executions being commingled in the `good_jobs` table to separately and discretely storing job executions in `good_job_executions`. To safely upgrade, all unfinished jobs must use the new format. This change was introduced in GoodJob [v3.15.4 (April 2023)](https://github.com/bensheldon/good_job/releases/tag/v3.15.4), so your application is likely ready-to-upgrade in this respect if you have kept up with GoodJob updates and applied migrations (`bin/rails g good_job:update`). _Please be sure to doublecheck you are not missing subsequent migrations or deprecations too by following the instructions below._
+GoodJob v4 changes how job and job execution records are stored in the database; moving from job and executions being commingled in the `good_jobs` table to separately and discretely storing job executions in `good_job_executions`. To safely upgrade, all unfinished jobs must use the new format. This change was introduced in GoodJob [v3.15.4 (April 2023)](https://github.com/bensheldon/good_job/releases/tag/v3.15.4), so your application is likely ready-to-upgrade in this respect if you have kept up with GoodJob updates and applied migrations (`bin/rails g good_job:update`). _Please be sure to double check you are not missing subsequent migrations or deprecations too by following the instructions below._
 
 To upgrade:
 
@@ -984,7 +984,7 @@ Notable changes:
 - Defaults to preserve job records, and automatically delete them after 14 days.
 - Defaults to discarding failed jobs, instead of immediately retrying them.
 - `:inline` execution mode respects job schedules. Tests can invoke  `GoodJob.perform_inline` to execute jobs.
-- `GoodJob::Adapter` can no longer can be initialized with custom execution options (`queues:`, `max_threads:`, `poll_interval:`).
+- `GoodJob::Adapter` can no longer be initialized with custom execution options (`queues:`, `max_threads:`, `poll_interval:`).
 - Renames `GoodJob::ActiveJobJob` to `GoodJob::Job`.
 - Removes support for Rails 5.2.
 
@@ -1726,7 +1726,7 @@ GoodJob allows for pausing jobs by queue or job class. This feature is currently
 > config.good_job.enable_pauses = true
 > ```
 
-Pausing can be done via the Dashboard's Performance page, or in Ruby
+Pausing can be done via the Dashboard's Pauses page, or in Ruby
 
 ```ruby
 # To pause:
@@ -1760,7 +1760,7 @@ Let’s start with anti-patterns, and then the rest of this section will explain
 - **Don’t use functional names for your queues** like `mailers` or `sms` or `turbo` or `batch`.  Instead name them after the total latency target (the total duration within queue and executing till finish) you expect for that job e.g.`latency_30s` or `latency_5m` or `literally_whenever`.
 - **Priority can’t fix a lack of capacity.** Priority rules (i.e. weighing or ordering which jobs or queues execute first) only works when there is  capacity available to execute that _next_ job. When all capacity is in-use, priority cannot preempt a job that is already executing ("head-of-line blocking").
 
-The following will explain methods to create homogenous workloads (based on latency) and increase execution capacity when queuing latency causes the jobs to exceed their total latency target.
+The following will explain methods to create homogeneous workloads (based on latency) and increase execution capacity when queuing latency causes the jobs to exceed their total latency target.
 
 ### Sizing jobs: mice and elephants
 
@@ -1772,7 +1772,7 @@ In a working application, you likely will have more gradations than just small a
 
 ### Isolating by total latency
 
-The most efficient workloads are homogenous (similar) workloads. If you know every job to be executed will take about the same amount of time, you can estimate the maximum delay for a new job at the back of the queue and have that drive decisions about capacity. Alternatively, if those jobs are heterogenous (mixed) it’s possible that a very slow/long-duration job could hold everything back for much longer than anticipated and it’s sorta random. That’s bad!
+The most efficient workloads are homogeneous (similar) workloads. If you know every job to be executed will take about the same amount of time, you can estimate the maximum delay for a new job at the back of the queue and have that drive decisions about capacity. Alternatively, if those jobs are heterogeneous (mixed) it’s possible that a very slow/long-duration job could hold everything back for much longer than anticipated and it’s sorta random. That’s bad!
 
 A fun visual image here for a single-file queue is a doorway: If you only have 1 doorway, it must be big enough to fit an elephant. But if an elephant is going through the door (and it will go through slowly!) no mice can fit through the door until the elephant is fully clear. Your mice will be delayed!
 
@@ -1806,7 +1806,7 @@ Using the wildcard  `*` for any queue also helps ensure that if a job is enqueue
 
 In these examples, the order doesn’t matter; it just is maybe more readable to go from the lowest-latency to largest-latency pool (the semicolon groups), and then within a pool to list the largest allowable latency first (the commas). Nothing here is about “job priority” or “queue priority”, this is wholly about grouping.
 
-In your application, not the zoo, you’ll want to enqueue your `PaswordResetJob` on the `mice` queue, your `CreateComplicatedObjectJob` on the `badger` queue, and your `AuditEveryAccountEverJob` on the `elephant` queue. But you want to name your queues by latency, so that ends up being:
+In your application, not the zoo, you’ll want to enqueue your `PasswordResetJob` on the `mice` queue, your `CreateComplicatedObjectJob` on the `badger` queue, and your `AuditEveryAccountEverJob` on the `elephant` queue. But you want to name your queues by latency, so that ends up being:
 
 ```ruby
 config.good_job.queues = "latency_30s:1; latency_2m,latency_30s:1; *:1"
@@ -1919,7 +1919,7 @@ Package maintainers can release this gem by running:
 $ gem signin
 
 # Add a .env file with the following:
-# CHANGELOG_GITHUB_TOKEN= # Github Personal Access Token
+# CHANGELOG_GITHUB_TOKEN= # GitHub Personal Access Token
 
 # Update version number, changelog, and create git commit:
 $ bundle exec rake release_good_job[minor] # major,minor,patch

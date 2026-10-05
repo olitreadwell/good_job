@@ -17,7 +17,7 @@
       document.documentElement.setAttribute('data-bs-theme', theme);
     </script>
 
-    <%# Do not use asset tag helpers to avoid paths being overriden by config.asset_host %>
+    <%# Do not use asset tag helpers to avoid paths being overridden by config.asset_host %>
     <%= tag.link rel: "stylesheet", href: frontend_static_path(:bootstrap, format: :css, locale: nil), nonce: content_security_policy_nonce, data: { turbo_track: "reload" } %>
     <%= tag.link rel: "stylesheet", href: frontend_static_path(:style, format: :css, locale: nil), nonce: content_security_policy_nonce, data: { turbo_track: "reload" } %>
     <%= tag.script "", src: frontend_static_path(:bootstrap, format: :js, locale: nil), nonce: content_security_policy_nonce %>
