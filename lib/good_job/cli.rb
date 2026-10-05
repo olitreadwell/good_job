@@ -180,8 +180,8 @@ module GoodJob
     long_desc <<~DESCRIPTION
       Manually destroys preserved job records.
 
-      By default, GoodJob automatically destroys job records when the job is performed
-      and this command is not required to be used.
+      By default, GoodJob retains finished job records for 14 days and then
+      automatically deletes them. Use this command to destroy them sooner.
 
     DESCRIPTION
     method_option :before_seconds_ago,

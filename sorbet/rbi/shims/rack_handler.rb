@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Manually exported via Tapioca because rackup is not compatible with Rack 2.0
-# which is used for development, but Rackup is is necessary as a fallback for
+# which is used for development, but Rackup is necessary as a fallback for
 # Rack 3.0 compatibility. And Rackup 1.0 is bugged.
 #
 # https://github.com/rack/rackup/issues/13#issuecomment-2186788166

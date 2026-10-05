@@ -177,7 +177,7 @@ RSpec.describe GoodJob::AdvisoryLockable do
     end
 
     context 'when a block is passed' do
-      it 'locks that key for the bloc and then unlocks it' do
+      it 'locks that key for the block and then unlocks it' do
         model_class.advisory_lock_key(job.lockable_key) do
           expect(job.advisory_locked?).to be true
           expect(job.owns_advisory_lock?).to be true

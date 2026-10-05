@@ -53,7 +53,7 @@ module GoodJob
     end
 
     def self.validate_dequeue_query_sort(dequeue_query_sort)
-      raise ArgumentError, "GoodJob dequeue query sortmust be one of #{DEQUEUE_QUERY_SORTS.join(', ')}. It was '#{dequeue_query_sort}' which is not valid." unless dequeue_query_sort.in?(DEQUEUE_QUERY_SORTS)
+      raise ArgumentError, "GoodJob dequeue query sort must be one of #{DEQUEUE_QUERY_SORTS.join(', ')}. It was '#{dequeue_query_sort}' which is not valid." unless dequeue_query_sort.in?(DEQUEUE_QUERY_SORTS)
     end
 
     # The options that were explicitly set when initializing +Configuration+.

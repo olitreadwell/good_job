@@ -176,7 +176,7 @@ describe GoodJob::CronEntry do
       expect(entry.display_schedule).to eq('* * * * *')
     end
 
-    it 'returns the cron expression for a schedule parsed using natual language' do
+    it 'returns the cron expression for a schedule parsed using natural language' do
       entry = described_class.new(cron: 'every weekday at five')
       expect(entry.display_schedule).to eq('0 5 * * 1-5')
     end
