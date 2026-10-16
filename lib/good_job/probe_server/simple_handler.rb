@@ -60,8 +60,13 @@ module GoodJob
             request = client.gets
 
             if request
-              status, headers, body = @app.call(parse_request(request))
-              respond(client, status, headers, body)
+              env = parse_request(request)
+              if env
+                status, headers, body = @app.call(env)
+                respond(client, status, headers, body)
+              else
+                respond(client, 400, {}, ["Bad Request"])
+              end
             end
 
             client.close
@@ -79,6 +84,8 @@ module GoodJob
 
       def parse_request(request)
         method, full_path = request.split
+        return unless method && full_path
+
         path, query = full_path.split('?')
         { 'REQUEST_METHOD' => method, 'PATH_INFO' => path, 'QUERY_STRING' => query || '' }
       end
