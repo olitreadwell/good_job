@@ -87,6 +87,26 @@ RSpec.describe GoodJob::ProbeServer do
           probe_server.stop
         end
       end
+
+      context 'when a client sends a request without a method or path' do
+        it 'responds with 400 and keeps serving healthchecks' do
+          probe_server = described_class.new(port: port)
+          probe_server.start
+          wait_until(max: 1) { expect(probe_server).to be_running }
+
+          socket = TCPSocket.new("127.0.0.1", port)
+          socket.write("GARBAGE\r\n\r\n")
+          readable, = IO.select([socket], nil, nil, 2)
+          status_line = readable && socket.gets
+          socket.close
+
+          expect(status_line).to include("400")
+          expect(probe_server).to be_running
+          expect(Net::HTTP.get("127.0.0.1", "/", port)).to eq("OK")
+
+          probe_server.stop
+        end
+      end
     end
 
     context "with WEBrick" do
