@@ -1,4 +1,7 @@
+# typed: true
 # frozen_string_literal: true
+
+require "concurrent/errors"
 
 module GoodJob
   class ProbeServer

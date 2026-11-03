@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 require 'thor'
@@ -66,10 +67,14 @@ module GoodJob
                   type: :string,
                   banner: "QUEUE_LIST",
                   desc: "Queues or queue pools to work from. (env var: GOOD_JOB_QUEUES, default: *)"
+    method_option :threads,
+                  type: :numeric,
+                  banner: 'COUNT',
+                  desc: "Default number of threads per pool to use for working jobs. (env var: GOOD_JOB_THREADS, default: 5)"
     method_option :max_threads,
                   type: :numeric,
                   banner: 'COUNT',
-                  desc: "Default number of threads per pool to use for working jobs. (env var: GOOD_JOB_MAX_THREADS, default: 5)"
+                  desc: "(DEPRECATED: use --threads) Default number of threads per pool to use for working jobs. (env var: GOOD_JOB_MAX_THREADS, default: 5)"
     method_option :subprocesses,
                   type: :numeric,
                   banner: 'COUNT',
@@ -188,6 +193,10 @@ module GoodJob
                   type: :numeric,
                   banner: 'SECONDS',
                   desc: "Destroy records finished more than this many seconds ago (env var: GOOD_JOB_CLEANUP_PRESERVED_JOBS_BEFORE_SECONDS_AGO, default: 1209600 (14 days))"
+    method_option :discarded_before_seconds_ago,
+                  type: :numeric,
+                  banner: 'SECONDS',
+                  desc: "Destroy discarded records finished more than this many seconds ago (env var: GOOD_JOB_CLEANUP_DISCARDED_JOBS_BEFORE_SECONDS_AGO, default: same as --before-seconds-ago)"
 
     def cleanup_preserved_jobs
       set_up_application!

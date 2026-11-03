@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 require "active_job"
@@ -5,7 +6,9 @@ require "active_job/queue_adapters"
 
 require_relative "good_job/version"
 require_relative "good_job/engine"
+require_relative "good_job/ractors"
 
+require_relative "good_job/instance_registry"
 require_relative "good_job/adapter"
 require_relative "good_job/adapter/inline_buffer"
 require_relative "active_job/queue_adapters/good_job_adapter"
@@ -17,7 +20,6 @@ require_relative "good_job/active_job_extensions/interrupt_errors"
 require_relative "good_job/active_job_extensions/labels"
 require_relative "good_job/active_job_extensions/notify_options"
 
-require_relative "good_job/overridable_connection"
 require_relative "good_job/bulk"
 require_relative "good_job/callable"
 require_relative "good_job/capsule"
@@ -78,7 +80,8 @@ module GoodJob
   #   @return [ActiveRecord::Base]
   #   @example Change the base class:
   #     GoodJob.active_record_parent_class = "CustomApplicationRecord"
-  mattr_accessor :active_record_parent_class, default: nil
+  singleton_class.attr_accessor :active_record_parent_class
+  self.active_record_parent_class = nil
 
   # @!attribute [rw] logger
   #   @!scope class
@@ -87,7 +90,8 @@ module GoodJob
   #   @return [Logger, nil]
   #   @example Output GoodJob logs to a file:
   #     GoodJob.logger = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new("log/my_logs.log"))
-  mattr_accessor :logger, default: DEFAULT_LOGGER
+  singleton_class.attr_accessor :logger
+  self.logger = DEFAULT_LOGGER
 
   # @!attribute [rw] preserve_job_records
   #   @!scope class
@@ -100,7 +104,8 @@ module GoodJob
   #   @example Preserve only jobs that were discarded
   #     GoodJob.preserve_job_records = ->(active_job, exception, error_event) { error_event == :discarded }
   #   @return [Boolean, Symbol, Proc, nil]
-  mattr_accessor :preserve_job_records, default: true
+  singleton_class.attr_accessor :preserve_job_records
+  self.preserve_job_records = true
 
   # @!attribute [rw] retry_on_unhandled_error
   #   @!scope class
@@ -109,7 +114,8 @@ module GoodJob
   #   If +false+, jobs will be discarded or marked as finished if they raise an instance of a handled exception.
   #   @see GoodJob.handled_exceptions
   #   @return [Boolean, nil]
-  mattr_accessor :retry_on_unhandled_error, default: false
+  singleton_class.attr_accessor :retry_on_unhandled_error
+  self.retry_on_unhandled_error = false
 
   # @!attribute [rw] handled_exceptions
   #   @!scope class
@@ -119,7 +125,8 @@ module GoodJob
   #   @example Also rescue ScriptError
   #     GoodJob.handled_exceptions = [StandardError, NotImplementedError, ScriptError]
   #   @return [Array<Class, String>]
-  mattr_accessor :handled_exceptions, default: [StandardError, NotImplementedError]
+  singleton_class.attr_accessor :handled_exceptions
+  self.handled_exceptions = [StandardError, NotImplementedError]
 
   # Resolved exception classes from {handled_exceptions}.
   # @return [Array<Class>]
@@ -135,19 +142,22 @@ module GoodJob
   #     # config/initializers/good_job.rb
   #     GoodJob.on_thread_error = -> (exception) { Raven.capture_exception(exception) }
   #   @return [Proc, nil]
-  mattr_accessor :on_thread_error, default: nil
+  singleton_class.attr_accessor :on_thread_error
+  self.on_thread_error = nil
 
   # @!attribute [rw] configuration
   #   @!scope class
   #   Global configuration object for GoodJob.
   #   @return [GoodJob::Configuration, nil]
-  mattr_accessor :configuration, default: GoodJob::Configuration.new({})
+  singleton_class.attr_accessor :configuration
+  self.configuration = GoodJob::Configuration.new({})
 
   # @!attribute [rw] capsule
   #   @!scope class
   #   Global/default execution capsule for GoodJob.
   #   @return [GoodJob::Capsule, nil]
-  mattr_accessor :capsule, default: GoodJob::Capsule.new(configuration: configuration)
+  singleton_class.attr_accessor :capsule
+  self.capsule = GoodJob::Capsule.new(configuration: configuration)
 
   # Called with exception when a GoodJob thread raises an exception
   # @param exception [Exception] Exception that was raised
@@ -168,7 +178,57 @@ module GoodJob
     self._active_record_configuration = block
   end
 
-  mattr_accessor :_active_record_configuration, default: nil
+  singleton_class.attr_accessor :_active_record_configuration
+  self._active_record_configuration = nil
+
+  # Makes GoodJob's global state Ractor-shareable so that jobs can be enqueued
+  # and performed from non-main Ractors. Called automatically by
+  # +Rails.application.ractorize!+ on Rails versions that support Ractors.
+  # Background execution (capsules, schedulers, the notifier) remains on the
+  # main Ractor.
+  # @return [void]
+  def self.ractorize!
+    _load_record_schemas
+    LogSubscriber.prepare_for_sharing
+    Ractors.make_shareable(configuration.prepare_for_sharing)
+    Ractors.make_shareable(handled_exceptions)
+    Ractors.make_shareable(logger)
+    self.preserve_job_records = Ractors.try_shareable_proc(preserve_job_records)
+    self.on_thread_error = Ractors.try_shareable_proc(on_thread_error)
+    _make_job_classes_shareable
+  end
+
+  # Concurrency and label settings are class attributes that may hold
+  # user-provided procs; they are frozen in place on each job class.
+  # @return [void]
+  def self._make_job_classes_shareable
+    attributes = %i[good_job_concurrency_config good_job_concurrency_rules good_job_labels]
+    [ActiveJob::Base, *ActiveJob::Base.descendants].each do |job_class|
+      attributes.each do |attribute|
+        Ractors.try_make_shareable(job_class.public_send(attribute)) if job_class.respond_to?(attribute)
+      end
+    end
+  end
+
+  # Active Record schemas and GoodJob's database capability checks are
+  # lazily loaded into class-level state, which can only be written from
+  # the main Ractor.
+  # @return [void]
+  def self._load_record_schemas
+    GoodJob::AdvisoryLockable.hash_function
+    GoodJob::BaseRecord.descendants.each do |record_class|
+      next if record_class.abstract_class?
+
+      record_class.columns_hash # loads the schema; `load_schema` is private before Rails 7.1
+      record_class.define_attribute_methods
+    end
+    GoodJob::Job.lock_type_column_exists?
+    GoodJob::Job.supports_cte_materialization_specifiers?
+    GoodJob::Job.database_supports_websearch_to_tsquery?
+    GoodJob::BatchRecord.database_supports_websearch_to_tsquery?
+  rescue ActiveRecord::ActiveRecordError => e
+    logger&.warn("GoodJob could not load its database schema before ractorizing: #{e.message}")
+  end
 
   # Stop executing jobs.
   # GoodJob does its work in pools of background threads.
@@ -189,6 +249,16 @@ module GoodJob
   # @return [Boolean] whether background threads are shut down
   def self.shutdown?
     Capsule.instances.all?(&:shutdown?)
+  end
+
+  # Removes shut down instances (e.g. {GoodJob::Capsule}, {GoodJob::Scheduler}, {GoodJob::Notifier}) from their
+  # class-level registries so they can be garbage collected. Shut down instances are otherwise retained so that
+  # {.restart} can restart them; pruned instances will not be restarted by {.restart} unless started again directly.
+  # This is useful in processes that repeatedly create and shut down capsules, such as test suites.
+  # @return [void]
+  def self.prune
+    [Adapter, Capsule, CronManager, Notifier, Poller, Scheduler, SharedExecutor, CapsuleTracker].each(&:prune)
+    nil
   end
 
   # Stops and restarts executing jobs.
@@ -234,40 +304,55 @@ module GoodJob
   # sooner, for example to preserve space in your database.
   # @param older_than [nil,Numeric,ActiveSupport::Duration] Jobs older than this will be destroyed (default: +GoodJob.cleanup_preserved_jobs_before_seconds_ago+, which defaults to 14 days).
   # @param include_discarded [Boolean] Whether or not to destroy discarded jobs (default: per +cleanup_discarded_jobs+ config option)
+  # @param discarded_older_than [nil,Numeric,ActiveSupport::Duration] Discarded jobs older than this will be destroyed (default: per +cleanup_discarded_jobs_before_seconds_ago+ config option, or +older_than+ when that is not set)
   # @return [Integer] Number of job execution records and batches that were destroyed.
-  def self.cleanup_preserved_jobs(older_than: nil, in_batches_of: 1_000, include_discarded: GoodJob.configuration.cleanup_discarded_jobs?)
+  def self.cleanup_preserved_jobs(older_than: nil, in_batches_of: 1_000, include_discarded: GoodJob.configuration.cleanup_discarded_jobs?, discarded_older_than: nil)
     older_than ||= GoodJob.configuration.cleanup_preserved_jobs_before_seconds_ago
     timestamp = Time.current - older_than
+    discarded_older_than ||= GoodJob.configuration.cleanup_discarded_jobs_before_seconds_ago
+    discarded_timestamp = discarded_older_than ? Time.current - discarded_older_than : timestamp
 
-    ActiveSupport::Notifications.instrument("cleanup_preserved_jobs.good_job", { older_than: older_than, timestamp: timestamp }) do |payload|
+    instrument_payload = { older_than: older_than, timestamp: timestamp }
+    if include_discarded && discarded_older_than
+      instrument_payload[:discarded_older_than] = discarded_older_than
+      instrument_payload[:discarded_timestamp] = discarded_timestamp
+    end
+
+    ActiveSupport::Notifications.instrument("cleanup_preserved_jobs.good_job", instrument_payload) do |payload|
       deleted_jobs_count = 0
       deleted_batches_count = 0
       deleted_executions_count = 0
 
-      jobs_query = GoodJob::Job.finished_before(timestamp).order(finished_at: :asc).limit(in_batches_of)
-      jobs_query = jobs_query.succeeded unless include_discarded
-      loop do
-        break if GoodJob.current_thread_shutting_down?
+      jobs_queries = cleanup_queries(GoodJob::Job, timestamp, include_discarded, discarded_timestamp)
+      jobs_queries.each do |jobs_query|
+        jobs_query = jobs_query.order(finished_at: :asc).limit(in_batches_of)
+        loop do
+          break if GoodJob.current_thread_shutting_down?
 
-        active_job_ids = jobs_query.pluck(:active_job_id)
-        break if active_job_ids.empty?
+          active_job_ids = jobs_query.pluck(:active_job_id)
+          break if active_job_ids.empty?
 
-        deleted_executions = GoodJob::Execution.where(active_job_id: active_job_ids).delete_all
-        deleted_executions_count += deleted_executions
+          deleted_executions = GoodJob::Execution.where(active_job_id: active_job_ids).delete_all
+          deleted_executions_count += deleted_executions
 
-        deleted_jobs = GoodJob::Job.where(active_job_id: active_job_ids).delete_all
-        deleted_jobs_count += deleted_jobs
+          deleted_jobs = GoodJob::Job.where(active_job_id: active_job_ids).delete_all
+          deleted_jobs_count += deleted_jobs
+        end
       end
 
-      batches_query = GoodJob::BatchRecord.finished_before(timestamp).limit(in_batches_of)
-      batches_query = batches_query.succeeded unless include_discarded
-      loop do
-        break if GoodJob.current_thread_shutting_down?
+      GoodJob::ConcurrencyClaim.cleanup_orphaned if GoodJob::ConcurrencyClaim.table_exists?
 
-        deleted = batches_query.delete_all
-        break if deleted.zero?
+      batches_queries = cleanup_queries(GoodJob::BatchRecord, timestamp, include_discarded, discarded_timestamp)
+      batches_queries.each do |batches_query|
+        batches_query = batches_query.limit(in_batches_of)
+        loop do
+          break if GoodJob.current_thread_shutting_down?
 
-        deleted_batches_count += deleted
+          deleted = batches_query.delete_all
+          break if deleted.zero?
+
+          deleted_batches_count += deleted
+        end
       end
 
       payload[:destroyed_batches_count] = deleted_batches_count
@@ -280,6 +365,18 @@ module GoodJob
       destroyed_records_count
     end
   end
+
+  # The queries for the finished records of +model+ that {.cleanup_preserved_jobs} destroys:
+  # succeeded records finished before +timestamp+, and discarded records finished before
+  # +discarded_timestamp+ when +include_discarded+.
+  # @return [Array<ActiveRecord::Relation>]
+  def self.cleanup_queries(model, timestamp, include_discarded, discarded_timestamp)
+    return [model.finished_before(timestamp).succeeded] unless include_discarded
+    return [model.finished_before(timestamp)] if discarded_timestamp == timestamp
+
+    [model.finished_before(timestamp).succeeded, model.finished_before(discarded_timestamp).discarded]
+  end
+  private_class_method :cleanup_queries
 
   # Perform all queued jobs in the current thread.
   # This is primarily intended for usage in a test environment.
@@ -315,7 +412,7 @@ module GoodJob
   # @return [ActiveSupport::Deprecation]
   def self.deprecator
     @_deprecator ||= begin
-      next_major_version = GEM_VERSION.segments[0] + 1
+      next_major_version = GEM_VERSION.segments.first.to_i + 1
       ActiveSupport::Deprecation.new("#{next_major_version}.0", "GoodJob")
     end
   end
@@ -324,18 +421,9 @@ module GoodJob
   # For use in tests/CI to validate GoodJob is up-to-date.
   # @return [Boolean]
   def self.migrated?
-    cron_index_definition = GoodJob::Job.connection_pool.with_connection do |connection|
-      connection.select_value(<<~SQL.squish)
-        SELECT indexdef
-        FROM pg_indexes
-        WHERE schemaname = ANY (current_schemas(false))
-          AND tablename = #{connection.quote(GoodJob::Job.table_name)}
-          AND indexname = #{connection.quote('index_good_jobs_on_cron_key_and_cron_at_cond')}
-      SQL
+    GoodJob::Execution.connection_pool.with_connection do |connection|
+      connection.index_name_exists?(GoodJob::Execution.table_name, :index_good_job_executions_on_created_at)
     end
-
-    GoodJob::Job.lock_type_migrated? &&
-      cron_index_definition.to_s.include?("cron_at DESC NULLS LAST")
   end
 
   # Pause job execution for a given queue or job class.

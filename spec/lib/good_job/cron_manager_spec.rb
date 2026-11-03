@@ -12,6 +12,17 @@ RSpec.describe GoodJob::CronManager do
         cron_manager.start
       end.to change(cron_manager, :running?).from(false).to true
     end
+
+    it 'does not raise for natural language schedules or invalid entries' do
+      cron_entries = [
+        GoodJob::CronEntry.new(key: :natural, cron: 'every 15 minutes', class: 'TestJob'),
+        GoodJob::CronEntry.new(key: :invalid, cron: '2017-12-12', class: 'TestJob'),
+      ]
+      cron_manager = described_class.new(cron_entries, start_on_initialize: false)
+
+      expect { cron_manager.start }.not_to raise_error
+      cron_manager.shutdown
+    end
   end
 
   describe '#stop' do
@@ -27,7 +38,7 @@ RSpec.describe GoodJob::CronManager do
     let(:cron_entries) do
       [
         GoodJob::CronEntry.new(
-          key: 'example',
+          key: :example,
           cron: "* * * * * *", # cron-style scheduling format by fugit gem, allows seconds resolution
           class: "TestJob", # reference the Job class with a string
           args: [42, { name: "Alice" }], # arguments to pass.  Could also allow a Proc for dynamic args, but problematic?
@@ -52,7 +63,7 @@ RSpec.describe GoodJob::CronManager do
 
       job = GoodJob::Job.first
       expect(job).to have_attributes(
-        cron_key: 'example',
+        cron_key: "example",
         priority: -10
       )
     end
@@ -87,7 +98,7 @@ RSpec.describe GoodJob::CronManager do
       let(:cron_entries) do
         [
           GoodJob::CronEntry.new(
-            key: 'example',
+            key: :example,
             cron: my_proc,
             class: "TestJob"
           ),
@@ -113,7 +124,7 @@ RSpec.describe GoodJob::CronManager do
     let(:cron_entries) do
       [
         GoodJob::CronEntry.new(
-          key: 'example',
+          key: :example,
           cron: "0 * * * * *",
           class: "TestJob"
         ),
@@ -131,12 +142,15 @@ RSpec.describe GoodJob::CronManager do
 
     it "reenqueues jobs scheduled for the previous period" do
       cron_manager = described_class.new(cron_entries, start_on_initialize: false, graceful_restart_period: 5.minutes)
-      cron_manager.start
+      # Start in the middle of a minute so the live scheduler doesn't also enqueue the next run
+      Timecop.travel(Time.current.at_beginning_of_minute + 30.seconds) do
+        cron_manager.start
 
-      wait_until(max: 5) do
-        expect(GoodJob::Job.count).to eq 5
+        wait_until(max: 5) do
+          expect(GoodJob::Job.count).to eq 5
+        end
+        cron_manager.shutdown
       end
-      cron_manager.shutdown
     end
 
     it "only attempts times after the last job" do
@@ -213,19 +227,23 @@ RSpec.describe GoodJob::CronManager do
     end
 
     it "reports an entry's error without affecting other entries" do
-      failing_entry = GoodJob::CronEntry.new(key: 'failing', cron: "0 * * * * *", class: "TestJob")
+      failing_entry = GoodJob::CronEntry.new(key: :failing, cron: "0 * * * * *", class: "TestJob")
       allow(failing_entry).to receive(:within).and_raise(StandardError, "within failed")
 
       cron_manager = described_class.new([failing_entry, *cron_entries], start_on_initialize: false, graceful_restart_period: 5.minutes)
-      cron_manager.start
+      # Start in the middle of a minute so the live scheduler doesn't also enqueue the next run
+      Timecop.travel(Time.current.at_beginning_of_minute + 30.seconds) do
+        cron_manager.start
 
-      wait_until(max: 5) do
-        expect(GoodJob::Job.where(cron_key: 'example').count).to eq 5
-        expect(THREAD_ERRORS.map { |_name, error, _backtrace| error.message }).to eq ["within failed"]
+        wait_until(max: 5) do
+          expect(GoodJob::Job.where(cron_key: 'example').count).to eq 5
+          expect(THREAD_ERRORS.map { |_name, error, _backtrace| error.message }).to eq ["within failed"]
+        end
+        expect(cron_manager.instance_variable_get(:@tasks).keys).to contain_exactly(:failing, :example)
+
+        cron_manager.shutdown
       end
-      expect(cron_manager.instance_variable_get(:@tasks).keys).to contain_exactly('failing', 'example')
-
-      cron_manager.shutdown
+    ensure
       THREAD_ERRORS.clear
     end
   end

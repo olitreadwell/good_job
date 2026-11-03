@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 require "concurrent/hash"
@@ -19,6 +20,8 @@ module GoodJob # :nodoc:
       set: Hash,
     }.freeze
 
+    validate :validate_cron_key
+    validate :validate_cron_schedule
     validate :validate_job_class
     validate :validate_value_types
 
@@ -59,20 +62,17 @@ module GoodJob # :nodoc:
 
     def initialize(params = {})
       @params = params
-
-      return if cron_proc?
-      raise ArgumentError, "Invalid cron format: '#{cron}'" unless fugit.instance_of?(Fugit::Cron)
     end
 
     def key
-      params.fetch(:key)
+      params[:key]
     end
 
     alias id key
     alias to_param key
 
     def job_class
-      params.fetch(:class)
+      params[:class]
     end
 
     def set
@@ -95,12 +95,12 @@ module GoodJob # :nodoc:
       if cron_proc?
         result = Rails.application.executor.wrap { cron.call(previously_at || last_job_at) }
         if result.is_a?(String)
-          Fugit.parse(result).next_time.to_t
+          parse_cron_string(result)&.next_time&.to_t
         else
           result
         end
       else
-        fugit.next_time.to_t
+        fugit&.next_time&.to_t
       end
     end
 
@@ -108,14 +108,14 @@ module GoodJob # :nodoc:
       if cron_proc?
         result = Rails.application.executor.wrap { cron.call(previously_at || last_job_at) }
         if result.is_a?(String)
-          Fugit.parse(result).within(period).map(&:to_t)
+          parse_cron_string(result)&.within(period)&.map(&:to_t) || []
         else
           # A proc that returns a Time is called with the previous run's time, so when cron starts,
           # CronManager#create_task already enqueues every run missed since the last job.
           []
         end
       else
-        fugit.within(period).map(&:to_t)
+        fugit&.within(period)&.map(&:to_t) || []
       end
     end
 
@@ -140,8 +140,10 @@ module GoodJob # :nodoc:
           job_klass = resolve_job_class
           next unless job_klass.is_a?(Class)
 
-          configured_job = job_klass.set(set_value)
-          kwargs_value.present? ? configured_job.perform_later(*args_value, **kwargs_value) : configured_job.perform_later(*args_value)
+          configured_job = job_klass.set(resolve_set)
+          job_args = resolve_args
+          job_kwargs = resolve_kwargs
+          job_kwargs.present? ? configured_job.perform_later(*job_args, **job_kwargs) : configured_job.perform_later(*job_args)
         end
       end
     end
@@ -161,7 +163,7 @@ module GoodJob # :nodoc:
     end
 
     def display_schedule
-      cron_proc? ? display_property(cron) : fugit.original
+      fugit ? fugit.original : display_property(cron)
     end
 
     def jobs
@@ -185,6 +187,17 @@ module GoodJob # :nodoc:
 
     private
 
+    def validate_cron_key
+      errors.add(:key, "must be a Symbol") unless key.is_a?(Symbol)
+    end
+
+    def validate_cron_schedule
+      return if cron_proc?
+      return if fugit.instance_of?(Fugit::Cron)
+
+      errors.add(:cron, "'#{cron}' is not a valid schedule")
+    end
+
     def validate_job_class
       return if job_class.blank? || job_class.is_a?(Class) || job_class.respond_to?(:call)
 
@@ -203,12 +216,13 @@ module GoodJob # :nodoc:
     end
 
     def resolve_job_class
-      value = job_class_value
+      value = job_class
+      value = value.call if value.respond_to?(:call)
       value.is_a?(String) ? value.constantize : value
     end
 
     def cron
-      params.fetch(:cron)
+      params[:cron]
     end
 
     def cron_proc?
@@ -216,25 +230,27 @@ module GoodJob # :nodoc:
     end
 
     def fugit
-      @_fugit ||= Fugit.parse(cron)
+      return @_fugit if defined?(@_fugit)
+
+      @_fugit = parse_cron_string(cron)
     end
 
-    def job_class_value
-      value = job_class || nil
-      value.respond_to?(:call) ? value.call : value
+    def parse_cron_string(string)
+      schedule = Fugit.parse(string)
+      schedule if schedule.instance_of?(Fugit::Cron)
     end
 
-    def set_value
+    def resolve_set
       value = set || {}
       value.respond_to?(:call) ? value.call : value
     end
 
-    def args_value
+    def resolve_args
       value = args || []
       value.respond_to?(:call) ? value.call : value
     end
 
-    def kwargs_value
+    def resolve_kwargs
       value = kwargs || nil
       value.respond_to?(:call) ? value.call : value
     end

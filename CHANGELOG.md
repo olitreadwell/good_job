@@ -1,5 +1,155 @@
 # Changelog
 
+## [v4.24.0](https://github.com/bensheldon/good_job/tree/v4.24.0) (2026-10-29)
+
+[Full Changelog](https://github.com/bensheldon/good_job/compare/v4.23.1...v4.24.0)
+
+**Implemented enhancements:**
+
+- Add a separate retention period for discarded jobs [\#1897](https://github.com/bensheldon/good_job/pull/1897) ([IslamElsayed](https://github.com/IslamElsayed))
+
+**Fixed bugs:**
+
+- Prevent idle or malformed connections from stalling or stopping the probe server [\#1902](https://github.com/bensheldon/good_job/pull/1902) ([bensheldon](https://github.com/bensheldon))
+- Validate advisory lock SQL identifiers and harden dashboard filter params [\#1901](https://github.com/bensheldon/good_job/pull/1901) ([bensheldon](https://github.com/bensheldon))
+- Don't retain or report schedulers replaced by a capsule restart [\#1894](https://github.com/bensheldon/good_job/pull/1894) ([bensheldon](https://github.com/bensheldon))
+
+**Closed issues:**
+
+- \[feature request\] Cleanup older discarded jobs [\#1597](https://github.com/bensheldon/good_job/issues/1597)
+
+**Merged pull requests:**
+
+- Restructure code so it type-checks under Sorbet without runtime assertions [\#1899](https://github.com/bensheldon/good_job/pull/1899) ([bensheldon](https://github.com/bensheldon))
+- Upgrade development/demo Ruby to 4.0.9 and update dependencies [\#1898](https://github.com/bensheldon/good_job/pull/1898) ([bensheldon](https://github.com/bensheldon))
+- Fix flaky JRuby FrozenError by preloading record schemas in specs [\#1896](https://github.com/bensheldon/good_job/pull/1896) ([bensheldon](https://github.com/bensheldon))
+- Demo: shorten database connection lifetimes [\#1895](https://github.com/bensheldon/good_job/pull/1895) ([bensheldon](https://github.com/bensheldon))
+
+## [v4.23.1](https://github.com/bensheldon/good_job/tree/v4.23.1) (2026-10-27)
+
+[Full Changelog](https://github.com/bensheldon/good_job/compare/v4.23.0...v4.23.1)
+
+**Fixed bugs:**
+
+- Release abandoned job claims after database failures [\#1887](https://github.com/bensheldon/good_job/pull/1887) ([ollym](https://github.com/ollym))
+
+## [v4.23.0](https://github.com/bensheldon/good_job/tree/v4.23.0) (2026-10-27)
+
+[Full Changelog](https://github.com/bensheldon/good_job/compare/v4.22.1...v4.23.0)
+
+**Implemented enhancements:**
+
+- Filter sensitive job arguments in the Dashboard [\#1881](https://github.com/bensheldon/good_job/pull/1881) ([bogdan](https://github.com/bogdan))
+
+**Fixed bugs:**
+
+- Respect enable\_listen\_notify when promoting concurrency claims [\#1892](https://github.com/bensheldon/good_job/pull/1892) ([eidam](https://github.com/eidam))
+- Downgrade lock\_type before releasing advisory lock [\#1883](https://github.com/bensheldon/good_job/pull/1883) ([jmsanders](https://github.com/jmsanders))
+
+**Closed issues:**
+
+- ConcurrencyClaim sends NOTIFY even when enable\_listen\_notify is false [\#1891](https://github.com/bensheldon/good_job/issues/1891)
+
+**Merged pull requests:**
+
+- Keep JRuby platform in Gemfile.lock when Bundler re-resolves [\#1893](https://github.com/bensheldon/good_job/pull/1893) ([bensheldon](https://github.com/bensheldon))
+- Make integration specs robust under database load; fix mixed lock strategy specs [\#1890](https://github.com/bensheldon/good_job/pull/1890) ([bensheldon](https://github.com/bensheldon))
+- Pin CI test runners to ubuntu-24.04 [\#1888](https://github.com/bensheldon/good_job/pull/1888) ([bensheldon](https://github.com/bensheldon))
+- Require the concurrent-ruby classes GoodJob uses [\#1885](https://github.com/bensheldon/good_job/pull/1885) ([czj](https://github.com/czj))
+- Add index\_good\_job\_executions\_on\_created\_at [\#1884](https://github.com/bensheldon/good_job/pull/1884) ([clinejj](https://github.com/clinejj))
+- Demo: cap YJIT memory and shrink the Rack::Attack store [\#1880](https://github.com/bensheldon/good_job/pull/1880) ([bensheldon](https://github.com/bensheldon))
+- Demo: enable rbtrace in Puma workers for heap dumps; add sheap [\#1879](https://github.com/bensheldon/good_job/pull/1879) ([bensheldon](https://github.com/bensheldon))
+- Demo: warm up Puma before forking, add Thruster, raise DB pool [\#1878](https://github.com/bensheldon/good_job/pull/1878) ([bensheldon](https://github.com/bensheldon))
+- Return 404 for GET /jobs/mass\_update instead of redirecting [\#1877](https://github.com/bensheldon/good_job/pull/1877) ([bensheldon](https://github.com/bensheldon))
+- Load execution full traces and serialized params on demand [\#1876](https://github.com/bensheldon/good_job/pull/1876) ([bensheldon](https://github.com/bensheldon))
+- Add specs for the demo's Rack::Attack rules [\#1875](https://github.com/bensheldon/good_job/pull/1875) ([bensheldon](https://github.com/bensheldon))
+- Fix demo boot: don't require rails/all in bin/rails [\#1874](https://github.com/bensheldon/good_job/pull/1874) ([bensheldon](https://github.com/bensheldon))
+- Reduce demo app memory and crawler load [\#1873](https://github.com/bensheldon/good_job/pull/1873) ([bensheldon](https://github.com/bensheldon))
+- Fix JRuby flake from inspect in wait\_until predicate expectations [\#1872](https://github.com/bensheldon/good_job/pull/1872) ([bensheldon](https://github.com/bensheldon))
+- Remove Adapter::RUNTIMES so adapters can be garbage collected [\#1870](https://github.com/bensheldon/good_job/pull/1870) ([bensheldon](https://github.com/bensheldon))
+- Add GoodJob.prune to release shut down capsules, schedulers, and notifiers [\#1869](https://github.com/bensheldon/good_job/pull/1869) ([bensheldon](https://github.com/bensheldon))
+- Use resolve\_\[property\] naming for CronEntry configuration resolvers [\#1868](https://github.com/bensheldon/good_job/pull/1868) ([bensheldon](https://github.com/bensheldon))
+- Fix inconsistencies in the Brazilian Portuguese locale [\#1867](https://github.com/bensheldon/good_job/pull/1867) ([tiagoamaro](https://github.com/tiagoamaro))
+
+## [v4.22.1](https://github.com/bensheldon/good_job/tree/v4.22.1) (2026-10-13)
+
+[Full Changelog](https://github.com/bensheldon/good_job/compare/v4.22.0...v4.22.1)
+
+**Implemented enhancements:**
+
+- Show full job labels under the job name in dashboard tables [\#1862](https://github.com/bensheldon/good_job/pull/1862) ([olivier-thatch](https://github.com/olivier-thatch))
+
+**Fixed bugs:**
+
+- Keep the process id when refresh recreates a deleted process record [\#1866](https://github.com/bensheldon/good_job/pull/1866) ([wivern-co-uk](https://github.com/wivern-co-uk))
+- Don't apply a concurrency lock when a rule's label resolves to blank [\#1864](https://github.com/bensheldon/good_job/pull/1864) ([bensheldon](https://github.com/bensheldon))
+
+**Merged pull requests:**
+
+- Support enqueuing jobs from non-main Ractors [\#1863](https://github.com/bensheldon/good_job/pull/1863) ([bensheldon](https://github.com/bensheldon))
+
+## [v4.22.0](https://github.com/bensheldon/good_job/tree/v4.22.0) (2026-10-09)
+
+[Full Changelog](https://github.com/bensheldon/good_job/compare/v4.21.1...v4.22.0)
+
+**Implemented enhancements:**
+
+- Rename max\_threads config to threads and deprecate max\_threads [\#1846](https://github.com/bensheldon/good_job/pull/1846) ([bensheldon](https://github.com/bensheldon))
+
+**Closed issues:**
+
+- CI: json 3.0.2 removed `quirks_mode`, breaking ActiveSupport's JSON encoder on every test job [\#1816](https://github.com/bensheldon/good_job/issues/1816)
+
+**Merged pull requests:**
+
+- Restore JRuby gems to Gemfile.lock and add a spec guarding it [\#1861](https://github.com/bensheldon/good_job/pull/1861) ([bensheldon](https://github.com/bensheldon))
+- Upgrade vendored frontend libraries \(Turbo, Stimulus, es-module-shims, Bootstrap, Chart.js\) [\#1860](https://github.com/bensheldon/good_job/pull/1860) ([bensheldon](https://github.com/bensheldon))
+- Upgrade dev environment: Ruby 4.0.7, Bundler 4.0.22, and gems [\#1859](https://github.com/bensheldon/good_job/pull/1859) ([bensheldon](https://github.com/bensheldon))
+- Don't crash demo when git is unavailable \(e.g. Heroku\) [\#1858](https://github.com/bensheldon/good_job/pull/1858) ([bensheldon](https://github.com/bensheldon))
+- Add apply\_label: option to good\_job\_concurrency\_rule [\#1857](https://github.com/bensheldon/good_job/pull/1857) ([bensheldon](https://github.com/bensheldon))
+- Deprecate good\_job\_control\_concurrency\_with and key-only concurrency rules in favor of labels [\#1856](https://github.com/bensheldon/good_job/pull/1856) ([bensheldon](https://github.com/bensheldon))
+- Show concurrency claims on the dashboard [\#1855](https://github.com/bensheldon/good_job/pull/1855) ([bensheldon](https://github.com/bensheldon))
+- Allow json 3 for Rails versions that support it; pin json \< 3 only for older Rails [\#1854](https://github.com/bensheldon/good_job/pull/1854) ([bensheldon](https://github.com/bensheldon))
+
+## [v4.21.1](https://github.com/bensheldon/good_job/tree/v4.21.1) (2026-10-07)
+
+[Full Changelog](https://github.com/bensheldon/good_job/compare/v4.21.0...v4.21.1)
+
+**Fixed bugs:**
+
+- Fix crash on natural language cron schedules \(v4.21.0 regression\) [\#1853](https://github.com/bensheldon/good_job/pull/1853) ([bensheldon](https://github.com/bensheldon))
+
+**Closed issues:**
+
+- v4.21.0 regression: undefined method 'next\_time' for an instance of EtOrbi::EoTime [\#1852](https://github.com/bensheldon/good_job/issues/1852)
+
+## [v4.21.0](https://github.com/bensheldon/good_job/tree/v4.21.0) (2026-10-06)
+
+[Full Changelog](https://github.com/bensheldon/good_job/compare/v4.20.0...v4.21.0)
+
+**Implemented enhancements:**
+
+- Enqueue jobs with concurrency rules individually in bulk/batch, and support Lambda class-level labels [\#1851](https://github.com/bensheldon/good_job/pull/1851) ([bensheldon](https://github.com/bensheldon))
+
+**Closed issues:**
+
+- perform\_limit: 1 permits two same-label jobs to execute concurrently [\#1843](https://github.com/bensheldon/good_job/issues/1843)
+
+**Merged pull requests:**
+
+- Fix: Run the enqueue concurrency check always after the job's other enqueue callbacks [\#1850](https://github.com/bensheldon/good_job/pull/1850) ([bensheldon](https://github.com/bensheldon))
+- Add updated\_at to good\_job\_concurrency\_claims [\#1849](https://github.com/bensheldon/good_job/pull/1849) ([bensheldon](https://github.com/bensheldon))
+- Fix Russian/Ukrainian "one" plurals showing "1" for 21, 31, … and Russian apply\_to\_all text [\#1848](https://github.com/bensheldon/good_job/pull/1848) ([owgreen-dev](https://github.com/owgreen-dev))
+- Deprecate combining label: and key: in concurrency rules [\#1847](https://github.com/bensheldon/good_job/pull/1847) ([bensheldon](https://github.com/bensheldon))
+- Run specs in parallel with parallel\_tests [\#1845](https://github.com/bensheldon/good_job/pull/1845) ([bensheldon](https://github.com/bensheldon))
+- Fix perform\_limit race and promote waiting jobs when a concurrency claim is released [\#1844](https://github.com/bensheldon/good_job/pull/1844) ([bensheldon](https://github.com/bensheldon))
+- Fix Ukrainian x\_minutes "few" form showing "1" for every count [\#1842](https://github.com/bensheldon/good_job/pull/1842) ([owgreen-dev](https://github.com/owgreen-dev))
+- Fix flaky CronManager graceful restart spec at minute boundary [\#1841](https://github.com/bensheldon/good_job/pull/1841) ([bensheldon](https://github.com/bensheldon))
+- Validate cron entry keys and schedules instead of raising [\#1832](https://github.com/bensheldon/good_job/pull/1832) ([shiaho777](https://github.com/shiaho777))
+- Fix concurrency label matching and document dynamic labels [\#1827](https://github.com/bensheldon/good_job/pull/1827) ([shiaho777](https://github.com/shiaho777))
+- Add queue and total latency to the Performance dashboard [\#1812](https://github.com/bensheldon/good_job/pull/1812) ([dennispaagman](https://github.com/dennispaagman))
+- Remove connection overrides from process heartbeats [\#1763](https://github.com/bensheldon/good_job/pull/1763) ([bensheldon](https://github.com/bensheldon))
+
 ## [v4.20.0](https://github.com/bensheldon/good_job/tree/v4.20.0) (2026-10-03)
 
 [Full Changelog](https://github.com/bensheldon/good_job/compare/v4.19.4...v4.20.0)
@@ -3702,7 +3852,7 @@
 
 **Fixed bugs:**
 
-- Don’t attempt to enforce concurrency limits with other queue adapters [\#333](https://github.com/bensheldon/good_job/pull/333) ([codyrobbins](https://github.com/codyrobbins))
+- Don’t attempt to enforce concurrency limits with other queue adapters [\#333](https://github.com/bensheldon/good_job/pull/333) ([CodyRobbins](https://github.com/CodyRobbins))
 
 ## [v1.13.0](https://github.com/bensheldon/good_job/tree/v1.13.0) (2021-08-18)
 
@@ -3729,7 +3879,7 @@
 
 **Fixed bugs:**
 
-- Fixes for race conditions in ActiveJob concurrency extension [\#326](https://github.com/bensheldon/good_job/pull/326) ([codyrobbins](https://github.com/codyrobbins))
+- Fixes for race conditions in ActiveJob concurrency extension [\#326](https://github.com/bensheldon/good_job/pull/326) ([CodyRobbins](https://github.com/CodyRobbins))
 
 **Merged pull requests:**
 

@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 module GoodJob
@@ -109,22 +110,22 @@ module GoodJob
 
         begin
           if build_result[:bulkable].any?
-            Job.transaction(requires_new: true, joinable: false) do
-              persisted_jobs = _insert_jobs(build_result[:bulkable], build_result[:active_jobs_by_job_id])
+            persisted_jobs, inline_jobs = Job.transaction(requires_new: true, joinable: false) do
+              inserted_jobs = _insert_jobs(build_result[:bulkable], build_result[:active_jobs_by_job_id])
+              next [inserted_jobs, []] unless execute_inline
 
-              if execute_inline
-                inline_jobs = persisted_jobs.select { |job| job.scheduled_at.nil? || job.scheduled_at <= current_time }
-                if lock_strategy != :advisory && lock_id && inline_jobs.any?
-                  Job.where(id: inline_jobs.map(&:id)).update_all( # rubocop:disable Rails/SkipsModelValidations
-                    locked_by_id: lock_id, locked_at: current_time, lock_type: Job.lock_types[lock_strategy.to_s]
-                  )
-                  inline_jobs.each { |j| j.assign_attributes(locked_by_id: lock_id, locked_at: current_time, lock_type: lock_strategy) }
-                end
-                case lock_strategy
-                when :advisory, :hybrid
-                  inline_jobs.each(&:advisory_lock!)
-                end
+              jobs_to_inline = inserted_jobs.select { |job| job.scheduled_at.nil? || job.scheduled_at <= current_time }
+              if lock_strategy != :advisory && lock_id && jobs_to_inline.any?
+                Job.where(id: jobs_to_inline.map(&:id)).update_all( # rubocop:disable Rails/SkipsModelValidations
+                  locked_by_id: lock_id, locked_at: current_time, lock_type: Job.lock_types[lock_strategy.to_s]
+                )
+                jobs_to_inline.each { |j| j.assign_attributes(locked_by_id: lock_id, locked_at: current_time, lock_type: lock_strategy) }
               end
+              case lock_strategy
+              when :advisory, :hybrid
+                jobs_to_inline.each(&:advisory_lock!)
+              end
+              [inserted_jobs, jobs_to_inline]
             end
           end
 
@@ -390,10 +391,8 @@ module GoodJob
           # Jobs with concurrency limits must be enqueued individually so the
           # before_enqueue concurrency check runs. Mirrors Bulk::Buffer#enqueue
           # partitioning (bulk.rb:95-98).
-          if active_job.respond_to?(:good_job_concurrency_key) &&
-             active_job.good_job_concurrency_key.present? &&
-             (active_job.class.good_job_concurrency_config[:enqueue_limit] ||
-               active_job.class.good_job_concurrency_config[:total_limit])
+          if active_job.respond_to?(:good_job_enqueue_concurrency_controlled?) &&
+             active_job.good_job_enqueue_concurrency_controlled?
             unbulkable << { batch: batch, active_job: active_job }
           else
             good_job = Job.build_for_enqueue(active_job)
@@ -446,7 +445,7 @@ module GoodJob
           state = { queue_name: queue_name, count: grouped_jobs.size }
           state[:scheduled_at] = scheduled_at if scheduled_at
 
-          executed_locally = adapter.respond_to?(:execute_async?) && adapter.execute_async? && GoodJob.capsule&.create_thread(state)
+          executed_locally = adapter.respond_to?(:execute_async?) && adapter.execute_async? && GoodJob.capsule.create_thread(state)
           unless executed_locally
             state[:count] = grouped_jobs.count { |job| _send_notify?(active_jobs_by_job_id[job.active_job_id]) }
             Notifier.notify(state) unless state[:count].zero?

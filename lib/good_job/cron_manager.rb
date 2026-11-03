@@ -1,5 +1,8 @@
+# typed: true
 # frozen_string_literal: true
 
+require "concurrent/errors"
+require "concurrent/future"
 require "concurrent/hash"
 require "concurrent/scheduled_task"
 require "fugit"
@@ -9,11 +12,7 @@ module GoodJob # :nodoc:
   # CronManagers enqueue jobs on a repeating schedule.
   #
   class CronManager
-    # @!attribute [r] instances
-    #   @!scope class
-    #   List of all instantiated CronManagers in the current process.
-    #   @return [Array<GoodJob::CronManager>, nil]
-    cattr_reader :instances, default: Concurrent::Array.new, instance_reader: false
+    include InstanceRegistry
 
     # Task observer for cron task
     # @param time [Time]
@@ -41,11 +40,12 @@ module GoodJob # :nodoc:
       @graceful_restart_period = graceful_restart_period
 
       start if start_on_initialize
-      self.class.instances << self
+      register_instance
     end
 
     # Schedule tasks that will enqueue jobs based on their schedule
     def start
+      register_instance
       ActiveSupport::Notifications.instrument("cron_manager_start.good_job", cron_entries: cron_entries) do
         @running = true
         graceful_restart = graceful_restart?
@@ -89,6 +89,7 @@ module GoodJob # :nodoc:
     # @param previously_at [Time, nil] the last +in-memory+ scheduled time the cron task was intended to run
     def create_task(cron_entry, at: nil, previously_at: nil)
       cron_at = at || cron_entry.next_at(previously_at: previously_at)
+      return unless cron_at
 
       # ScheduledTask runs immediately if delay is <= 0.01; avoid ever scheduling the task before the intended time
       # https://github.com/ruby-concurrency/concurrent-ruby/blob/56227a4c3ebdd53b8b0976eb8296ceb7a093496f/lib/concurrent-ruby/concurrent/executor/timer_set.rb#L97

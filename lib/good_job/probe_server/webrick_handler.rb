@@ -1,4 +1,7 @@
+# typed: true
 # frozen_string_literal: true
+
+require "concurrent/future"
 
 module GoodJob
   class ProbeServer

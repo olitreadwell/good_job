@@ -37,7 +37,7 @@ RSpec.describe GoodJob::ProbeServer do
         it 'starts a http server that binds to all interfaces and returns healthcheck responses' do
           probe_server = described_class.new(port: port, app: nil)
           probe_server.start
-          wait_until(max: 1) { expect(probe_server).to be_running }
+          wait_until(max: 1) { expect(probe_server.running?).to be true }
 
           ip_addresses = Socket.ip_address_list.select(&:ipv4?).map(&:ip_address)
           expect(ip_addresses.size).to be >= 2
@@ -71,7 +71,7 @@ RSpec.describe GoodJob::ProbeServer do
           app = proc { [200, { "Content-Type" => "text/plain" }, ["Hello World"]] }
           probe_server = described_class.new(app: app, port: port)
           probe_server.start
-          wait_until(max: 1) { expect(probe_server).to be_running }
+          wait_until(max: 1) { expect(probe_server.running?).to be true }
 
           ip_addresses = Socket.ip_address_list.select(&:ipv4?).map(&:ip_address)
           expect(ip_addresses.size).to be >= 2
@@ -94,12 +94,12 @@ RSpec.describe GoodJob::ProbeServer do
         it 'starts a WEBrick http server' do
           probe_server = described_class.new(port: port, handler: :webrick)
           probe_server.start
-          wait_until(max: 1) { expect(probe_server).to be_running }
+          wait_until(max: 1) { expect(probe_server.running?).to be true }
 
           ip_address = Socket.ip_address_list.select(&:ipv4?).map(&:ip_address).first
           response = Net::HTTP.get_response(ip_address, "/", port)
 
-          expect(response["server"]).to match(/WEBrick/)
+          expect(response["server"]).to include('WEBrick')
 
           probe_server.stop
         end
@@ -107,7 +107,7 @@ RSpec.describe GoodJob::ProbeServer do
         it 'server binds to all interfaces and returns healthcheck responses' do
           probe_server = described_class.new(port: port, handler: :webrick)
           probe_server.start
-          wait_until(max: 1) { expect(probe_server).to be_running }
+          wait_until(max: 1) { expect(probe_server.running?).to be true }
 
           ip_addresses = Socket.ip_address_list.select(&:ipv4?).map(&:ip_address)
           expect(ip_addresses.size).to be >= 2
@@ -142,7 +142,7 @@ RSpec.describe GoodJob::ProbeServer do
 
             probe_server = described_class.new(port: port, handler: :webrick)
             probe_server.start
-            wait_until(max: 1) { expect(probe_server).to be_running }
+            wait_until(max: 1) { expect(probe_server.running?).to be true }
 
             ip_address = Socket.ip_address_list.select(&:ipv4?).map(&:ip_address).first
             response = Net::HTTP.get(ip_address, "/", port)
@@ -160,7 +160,7 @@ RSpec.describe GoodJob::ProbeServer do
           app = proc { [200, { "Content-Type" => "text/plain" }, ["Hello World"]] }
           probe_server = described_class.new(app: app, port: port)
           probe_server.start
-          wait_until(max: 1) { expect(probe_server).to be_running }
+          wait_until(max: 1) { expect(probe_server.running?).to be true }
 
           ip_addresses = Socket.ip_address_list.select(&:ipv4?).map(&:ip_address)
           expect(ip_addresses.size).to be >= 2
@@ -184,7 +184,7 @@ RSpec.describe GoodJob::ProbeServer do
 
         probe_server = described_class.new(port: port, handler: :puma)
         probe_server.start
-        wait_until(max: 1) { expect(probe_server).to be_running }
+        wait_until(max: 1) { expect(probe_server.running?).to be true }
 
         ip_address = Socket.ip_address_list.select(&:ipv4?).map(&:ip_address).first
         response = Net::HTTP.get(ip_address, "/", port)
@@ -227,6 +227,45 @@ RSpec.describe GoodJob::ProbeServer do
 
       it 'is a no-op when the port was never bound' do
         expect { handler.close_socket }.not_to raise_error
+      end
+    end
+
+    describe 'serving requests' do
+      # Use an unused port to avoid colliding with other parallel test processes
+      let(:port) do
+        server = TCPServer.new('127.0.0.1', 0)
+        server.addr[1]
+      ensure
+        server&.close
+      end
+
+      before do
+        handler.listen
+        handler.build_future.execute
+      end
+
+      after { handler.stop }
+
+      def probe
+        Net::HTTP.start('127.0.0.1', port, read_timeout: 5) { |http| http.get('/') }
+      end
+
+      it 'is not blocked by an idle connection' do
+        idle_client = TCPSocket.new('127.0.0.1', port)
+
+        expect(probe.code).to eq '200'
+      ensure
+        idle_client&.close
+      end
+
+      it 'responds 400 to a malformed request and keeps serving' do
+        client = TCPSocket.new('127.0.0.1', port)
+        client.write "\r\n"
+        expect(client.read).to start_with "HTTP/1.1 400"
+        client.close
+
+        expect(probe.code).to eq '200'
+        expect(handler).to be_running
       end
     end
   end

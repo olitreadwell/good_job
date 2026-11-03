@@ -1,5 +1,7 @@
+# typed: true
 # frozen_string_literal: true
 
+require "concurrent/errors"
 require 'concurrent/timer_task'
 require 'good_job/sd_notify'
 

@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 require "rails"
@@ -9,6 +10,10 @@ module GoodJob
 
     config.good_job = ActiveSupport::OrderedOptions.new
     config.good_job.cron = {}
+
+    initializer "good_job.ractors" do |app|
+      app.singleton_class.prepend(GoodJob::Ractors::ApplicationExtension) if GoodJob::Ractors.enabled? && app.respond_to?(:ractorize!)
+    end
 
     initializer "good_job.logger" do |_app|
       ActiveSupport.on_load(:good_job) do
@@ -49,7 +54,8 @@ module GoodJob
     initializer 'good_job.active_record' do
       config.to_prepare do
         ActiveSupport.on_load :good_job_base_record, run_once: true do
-          GoodJob::BaseRecord.class_eval(&GoodJob._active_record_configuration) if GoodJob._active_record_configuration
+          configuration = GoodJob._active_record_configuration
+          GoodJob::BaseRecord.class_eval(&configuration) if configuration
         end
       end
     end

@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 module GoodJob
@@ -6,6 +7,7 @@ module GoodJob
     include AdvisoryLockable
     include Job::Lockable
     include ErrorEvents
+    include FilteredArguments
     include Filterable
     include Reportable
 
@@ -69,8 +71,9 @@ module GoodJob
     belongs_to :callback_batch, class_name: 'GoodJob::BatchRecord', foreign_key: :batch_callback_id, inverse_of: :callback_jobs, optional: true
     belongs_to :locked_by_process, class_name: "GoodJob::Process", foreign_key: :locked_by_id, inverse_of: :locked_jobs, optional: true
     has_many :executions, class_name: 'GoodJob::Execution', foreign_key: 'active_job_id', primary_key: "id", inverse_of: :job, dependent: :delete_all
+    has_many :concurrency_claims, class_name: 'GoodJob::ConcurrencyClaim', primary_key: :id, inverse_of: false, dependent: nil
 
-    before_create -> { self.id = active_job_id }, if: -> { active_job_id.present? }
+    before_create ->(job) { job.id = job.active_job_id }, if: -> { active_job_id.present? }
 
     # Get Jobs finished before the given timestamp.
     # @!method finished_before(timestamp)
@@ -294,6 +297,13 @@ module GoodJob
 
         migration_pending_warning!
         false
+      end
+
+      # Releases jobs locked by a process that is no longer running.
+      # @param locked_by_id [String] the process ID
+      # @return [void]
+      def release_process(locked_by_id)
+        where(locked_by_id: locked_by_id).update_all(locked_by_id: nil, locked_at: nil) # rubocop:disable Rails/SkipsModelValidations
       end
 
       def lock_type_migrated?
@@ -573,7 +583,7 @@ module GoodJob
                            when String
                              klass.constantize
                            when Job
-                             klass.job_class.constantize
+                             klass.job_class&.constantize
                            else
                              klass
                            end
@@ -614,6 +624,7 @@ module GoodJob
     # @return [Hash]
     def display_serialized_params
       serialized_params.merge({
+                                "arguments" => display_arguments,
                                 _good_job: attributes.except('serialized_params', 'locktype', 'owns_advisory_lock'),
                               })
     end
@@ -675,13 +686,14 @@ module GoodJob
           active_job.executions = (active_job.executions || 0) + 1
 
           begin
-            error_class, error_message = error.split(ERROR_MESSAGE_SEPARATOR).map(&:strip)
-            error = error_class.constantize.new(error_message)
+            error_class, error_message = error.to_s.split(ERROR_MESSAGE_SEPARATOR).map(&:strip)
+            error = error_class ? error_class.constantize.new(error_message) : StandardError.new(error)
           rescue StandardError
             error = StandardError.new(error)
           end
 
-          new_active_job = nil
+          # Populated by a block that may be deferred until after the transaction commits
+          new_active_jobs = []
 
           transaction do
             Job.defer_after_commit_maybe(active_job.class) do
@@ -691,7 +703,7 @@ module GoodJob
 
                 # NOTE: I18n.with_locale necessary until fixed in rails https://github.com/rails/rails/pull/52121
                 I18n.with_locale(active_job.locale) do
-                  new_active_job = active_job.retry_job(wait: 0, error: error)
+                  new_active_jobs << active_job.retry_job(wait: 0, error: error)
                 end
               end
             end
@@ -699,7 +711,7 @@ module GoodJob
             save!
           end
 
-          new_active_job
+          new_active_jobs.first
         end
       end
     end
@@ -770,8 +782,7 @@ module GoodJob
 
         job_performed_at = Time.current
         monotonic_start = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
-        execution = nil
-        result = GoodJob::CurrentThread.within do |current_thread|
+        execution, result = GoodJob::CurrentThread.within do |current_thread|
           current_thread.reset
           current_thread.job = self
 
@@ -784,16 +795,16 @@ module GoodJob
             self.error_event = ErrorEvents::INTERRUPTED
             monotonic_duration = (::Process.clock_gettime(::Process::CLOCK_MONOTONIC) - monotonic_start).seconds
 
-            execution_attrs = {
+            interrupted_execution_attrs = {
               error: interrupt_error_string,
               finished_at: job_performed_at,
               error_event: error_event,
               duration: monotonic_duration,
             }
-            executions.where(finished_at: nil).where.not(performed_at: nil).update_all(execution_attrs) # rubocop:disable Rails/SkipsModelValidations
+            executions.where(finished_at: nil).where.not(performed_at: nil).update_all(interrupted_execution_attrs) # rubocop:disable Rails/SkipsModelValidations
           end
 
-          transaction do
+          new_execution = transaction do
             execution_attrs = {
               job_class: job_class,
               queue_name: queue_name,
@@ -812,11 +823,12 @@ module GoodJob
               job_attrs[:lock_type] = :advisory if self.class.lock_type_column_exists?
             end
 
-            execution = executions.create!(execution_attrs)
+            created_execution = executions.create!(execution_attrs)
             update!(job_attrs)
+            created_execution
           end
 
-          ActiveSupport::Notifications.instrument("perform_job.good_job", { job: self, execution: execution, process_id: current_thread.process_id, thread_name: current_thread.thread_name }) do |instrument_payload|
+          execution_result = ActiveSupport::Notifications.instrument("perform_job.good_job", { job: self, execution: new_execution, process_id: current_thread.process_id, thread_name: current_thread.thread_name }) do |instrument_payload|
             value = ActiveJob::Base.execute(active_job_data)
             active_job = current_thread.active_job
 
@@ -862,6 +874,8 @@ module GoodJob
             )
             ExecutionResult.new(value: nil, active_job: active_job, unhandled_error: e, error_event: error_event)
           end
+
+          [new_execution, execution_result]
         end
 
         job_attributes = { locked_by_id: nil, locked_at: nil }
@@ -906,6 +920,8 @@ module GoodJob
           destroy!
         end
 
+        release_concurrency_claims
+
         result
       end
     end
@@ -943,6 +959,18 @@ module GoodJob
     end
 
     private
+
+    # Releases concurrency claims after the job's execution has been committed,
+    # promoting waiting jobs. Failures are reported but do not affect the finished job;
+    # leftover claims are removed by process and job cleanup.
+    def release_concurrency_claims
+      return unless GoodJob::ConcurrencyClaim.table_exists?
+      return unless job_class&.safe_constantize.respond_to?(:good_job_concurrency_rules)
+
+      GoodJob::ConcurrencyClaim.job_finished(self)
+    rescue StandardError => e
+      GoodJob._on_thread_error(e)
+    end
 
     def with_appropriate_lock
       if self.class.effective_lock_strategy == :skiplocked
@@ -995,8 +1023,8 @@ module GoodJob
     end
 
     def continue_discard_or_finish_batch
-      batch._continue_discard_or_finish(self) if batch.present?
-      callback_batch._continue_discard_or_finish if callback_batch.present?
+      batch&._continue_discard_or_finish(self)
+      callback_batch&._continue_discard_or_finish
     end
 
     def active_job_data
