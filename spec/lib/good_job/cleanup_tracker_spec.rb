@@ -12,7 +12,7 @@ describe GoodJob::CleanupTracker do
 
   describe '#cleanup?' do
     context 'with default parameters' do
-      it 'nevers trigger a cleanup' do
+      it 'never triggers a cleanup' do
         tracker = described_class.new
 
         1000.times { tracker.increment }

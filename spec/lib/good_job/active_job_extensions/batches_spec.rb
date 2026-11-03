@@ -52,7 +52,7 @@ RSpec.describe GoodJob::ActiveJobExtensions::Batches do
     end
   end
 
-  describe "enequeue" do
+  describe "enqueue" do
     context 'when job does not have GoodJob Adapter' do
       before do
         allow(GoodJob.logger).to receive(:debug).and_call_original

@@ -52,7 +52,7 @@ FileUtils.chdir GEM_ROOT do
     system!("bundle exec erb_lint app/views")
   else
     # Must run twice to run all linters
-    # https://github.com/Shopify/erb-lint/issues/145
+    # https://github.com/Shopify/erb_lint/issues/145
     puts "Running ERB Lint with autocorrectable linters"
     system!("bundle exec erb_lint --autocorrect app/views")
 

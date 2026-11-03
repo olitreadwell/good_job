@@ -100,7 +100,7 @@ RSpec.describe GoodJob::CLI do
       end
 
       context 'when a port and an app are set in the Rails configuration' do
-        it 'starts a ProbesServer with the configured port and app' do
+        it 'starts a ProbeServer with the configured port and app' do
           app_mock = instance_double(Proc, call: nil)
           configuration_mock = instance_double(
             GoodJob::Configuration,
