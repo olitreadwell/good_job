@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 require 'socket'
@@ -6,7 +7,6 @@ module GoodJob # :nodoc:
   # Active Record model that represents a GoodJob capsule/process (either async or CLI).
   class Process < BaseRecord
     include AdvisoryLockable
-    include OverridableConnection
 
     # Interval until the process record being updated
     STALE_INTERVAL = 30.seconds
@@ -29,7 +29,7 @@ module GoodJob # :nodoc:
                        end
                      when /darwin|bsd/
                        lambda do |pid|
-                         `ps -o pid,rss -p #{pid.to_i}`.lines.last.split.last.to_i
+                         `ps -o pid,rss -p #{pid.to_i}`.lines.last&.split&.last.to_i
                        end
                      else
                        ->(_pid) { 0 }
@@ -73,7 +73,8 @@ module GoodJob # :nodoc:
     # Deletes all inactive process records.
     def self.cleanup
       inactive.find_each do |process|
-        GoodJob::Job.where(locked_by_id: process.id).update_all(locked_by_id: nil, locked_at: nil) # rubocop:disable Rails/SkipsModelValidations
+        GoodJob::Job.release_process(process.id)
+        GoodJob::ConcurrencyClaim.release_process(process.id) if GoodJob::ConcurrencyClaim.table_exists?
         process.delete
       end
     end
@@ -85,22 +86,24 @@ module GoodJob # :nodoc:
       0
     end
 
-    def self.find_or_create_record(id:, with_advisory_lock: false)
+    def self.find_or_create_record(id:, with_advisory_lock: false, advisory_lock_connection: nil)
       attributes = {
         id: id,
         state: process_state,
       }
-      if with_advisory_lock
-        attributes[:create_with_advisory_lock] = true
-        attributes[:lock_type] = :advisory
+      attributes[:lock_type] = :advisory if with_advisory_lock
+
+      transaction do
+        record = create!(attributes)
+        record.advisory_lock!(connection: advisory_lock_connection) if with_advisory_lock
+        record
       end
-      create!(attributes)
     rescue ActiveRecord::RecordNotUnique
       find_by(id: id).tap do |existing_record|
         next unless existing_record
 
         if with_advisory_lock
-          existing_record.advisory_lock!
+          existing_record.advisory_lock!(connection: advisory_lock_connection)
           existing_record.update(lock_type: :advisory, state: process_state, updated_at: Time.current)
         else
           existing_record.update(lock_type: nil, state: process_state, updated_at: Time.current)
@@ -116,7 +119,7 @@ module GoodJob # :nodoc:
         proctitle: $PROGRAM_NAME,
         preserve_job_records: GoodJob.preserve_job_records,
         retry_on_unhandled_error: GoodJob.retry_on_unhandled_error,
-        schedulers: GoodJob::Scheduler.instances.map(&:stats),
+        schedulers: GoodJob::Scheduler.instances.reject(&:shutdown?).map(&:stats),
         cron_enabled: GoodJob.configuration.enable_cron?,
         total_succeeded_executions_count: GoodJob::Scheduler.instances.sum { |scheduler| scheduler.stats.fetch(:succeeded_executions_count) },
         total_errored_executions_count: GoodJob::Scheduler.instances.sum { |scheduler| scheduler.stats.fetch(:errored_executions_count) },
@@ -133,7 +136,8 @@ module GoodJob # :nodoc:
       update(state: state, updated_at: Time.current)
     rescue ActiveRecord::RecordNotFound
       @new_record = true
-      self.created_at = self.updated_at = nil
+      assign_attributes(created_at: nil, updated_at: nil)
+      id_will_change!
       state_will_change!
       save
     end

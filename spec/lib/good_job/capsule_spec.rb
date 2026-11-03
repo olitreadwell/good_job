@@ -21,6 +21,43 @@ describe GoodJob::Capsule do
       capsule.shutdown
     end
 
+    it 'enqueues cron jobs' do
+      stub_const 'TestJob', (Class.new(ActiveJob::Base) do
+        def perform
+        end
+      end)
+      ActiveJob::Base.queue_adapter = GoodJob::Adapter.new(execution_mode: :external)
+      options = { enable_cron: true, cron: { example: { cron: '* * * * * *', class: 'TestJob' } } }
+      capsule = described_class.new(configuration: GoodJob::Configuration.new(options))
+      capsule.start
+
+      wait_until(max: 5) do
+        expect(GoodJob::Job.where(cron_key: 'example').count).to be > 0
+      end
+      capsule.shutdown
+    end
+
+    it 'enqueues cron jobs from the graceful restart period' do
+      stub_const 'TestJob', (Class.new(ActiveJob::Base) do
+        def perform
+        end
+      end)
+      ActiveJob::Base.queue_adapter = GoodJob::Adapter.new(execution_mode: :external)
+      options = {
+        enable_cron: true,
+        cron: { example: { cron: '0 * * * * *', class: 'TestJob' } },
+        cron_graceful_restart_period: 5.minutes,
+      }
+      capsule = described_class.new(configuration: GoodJob::Configuration.new(options))
+      started_at = Time.current
+      capsule.start
+
+      wait_until(max: 5) do
+        expect(GoodJob::Job.where(cron_key: 'example', cron_at: ...started_at).count).to eq 5
+      end
+      capsule.shutdown
+    end
+
     it 'is safe to call from multiple threads' do
       capsule = described_class.new
       Array.new(100) { Thread.new { capsule.start } }.each(&:join)
@@ -44,6 +81,21 @@ describe GoodJob::Capsule do
       expect { capsule.restart }.to change(capsule, :running?).from(false).to(true)
       expect { capsule.restart }.not_to change(capsule, :running?).from(true)
       expect { capsule.shutdown }.to change(capsule, :running?).from(true).to(false)
+    end
+
+    it 'unregisters the components it replaces' do
+      capsule = described_class.new
+      capsule.start
+      replaced_schedulers = GoodJob::Scheduler.instances.dup
+      replaced_notifiers = GoodJob::Notifier.instances.dup
+      replaced_pollers = GoodJob::Poller.instances.dup
+
+      capsule.restart
+
+      expect(GoodJob::Scheduler.instances).not_to include(*replaced_schedulers)
+      expect(GoodJob::Notifier.instances).not_to include(*replaced_notifiers)
+      expect(GoodJob::Poller.instances).not_to include(*replaced_pollers)
+      expect(GoodJob::Scheduler.instances.size).to eq replaced_schedulers.size
     end
   end
 
@@ -113,7 +165,7 @@ describe GoodJob::Capsule do
       ACTIVE_EVENT.wait(5)
       WAIT_EVENT.set
 
-      wait_until { expect(capsule).to be_idle(1.second) }
+      wait_until { expect(capsule.idle?(1.second)).to be true }
     end
   end
 

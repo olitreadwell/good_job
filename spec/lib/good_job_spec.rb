@@ -52,6 +52,37 @@ describe GoodJob do
     end
   end
 
+  describe '.prune' do
+    it 'removes shut down instances from the registries' do
+      capsule = GoodJob::Capsule.new(configuration: configuration)
+      capsule.start
+      scheduler = GoodJob::Scheduler.instances.last
+      notifier = GoodJob::Notifier.instances.last
+
+      described_class.prune
+      expect(GoodJob::Capsule.instances).to include(capsule)
+      expect(GoodJob::Scheduler.instances).to include(scheduler)
+
+      capsule.shutdown
+      described_class.prune
+      expect(GoodJob::Capsule.instances).not_to include(capsule)
+      expect(GoodJob::Scheduler.instances).not_to include(scheduler)
+      expect(GoodJob::Notifier.instances).not_to include(notifier)
+      expect(GoodJob::SharedExecutor.instances).not_to include(capsule.instance_variable_get(:@shared_executor))
+      expect(GoodJob::CapsuleTracker.instances).not_to include(capsule.tracker)
+    end
+
+    it 're-registers a pruned capsule when it is started again' do
+      capsule = GoodJob::Capsule.new(configuration: configuration)
+      described_class.prune
+      expect(GoodJob::Capsule.instances).not_to include(capsule)
+
+      capsule.start
+      expect(GoodJob::Capsule.instances).to include(capsule)
+      expect { described_class.shutdown }.to change(capsule, :shutdown?).from(false).to(true)
+    end
+  end
+
   describe '.cleanup_preserved_jobs' do
     let!(:recent_job) { GoodJob::Job.create!(active_job_id: SecureRandom.uuid, finished_at: 12.hours.ago) }
     let!(:old_unfinished_job) { GoodJob::Job.create!(active_job_id: SecureRandom.uuid, scheduled_at: 15.days.ago, finished_at: nil) }
@@ -123,6 +154,61 @@ describe GoodJob do
       expect { old_finished_job_execution.reload }.to raise_error ActiveRecord::RecordNotFound
       expect { old_discarded_job.reload }.to raise_error ActiveRecord::RecordNotFound
       expect { old_batch.reload }.to raise_error ActiveRecord::RecordNotFound
+    end
+
+    context "when discarded jobs have their own retention period" do
+      let!(:older_discarded_job) { GoodJob::Job.create!(active_job_id: SecureRandom.uuid, finished_at: 40.days.ago, error: "Error") }
+      let!(:old_discarded_batch) { GoodJob::BatchRecord.create!(jobs_finished_at: 14.days.ago, finished_at: 15.days.ago, discarded_at: 15.days.ago) }
+      let!(:older_discarded_batch) { GoodJob::BatchRecord.create!(jobs_finished_at: 40.days.ago, finished_at: 40.days.ago, discarded_at: 40.days.ago) }
+
+      it "keeps discarded jobs and batches until that period passes" do
+        destroyed_records_count = described_class.cleanup_preserved_jobs(discarded_older_than: 30.days)
+
+        expect(destroyed_records_count).to eq 5
+
+        expect { old_finished_job.reload }.to raise_error ActiveRecord::RecordNotFound
+        expect { old_finished_job_execution.reload }.to raise_error ActiveRecord::RecordNotFound
+        expect { old_batch.reload }.to raise_error ActiveRecord::RecordNotFound
+        expect { old_discarded_job.reload }.not_to raise_error
+        expect { old_discarded_batch.reload }.not_to raise_error
+        expect { older_discarded_job.reload }.to raise_error ActiveRecord::RecordNotFound
+        expect { older_discarded_batch.reload }.to raise_error ActiveRecord::RecordNotFound
+      end
+
+      it "can destroy discarded jobs sooner than the others" do
+        described_class.cleanup_preserved_jobs(older_than: 20.days, discarded_older_than: 10.days)
+
+        expect { old_finished_job.reload }.not_to raise_error
+        expect { old_batch.reload }.not_to raise_error
+        expect { old_discarded_job.reload }.to raise_error ActiveRecord::RecordNotFound
+        expect { old_discarded_batch.reload }.to raise_error ActiveRecord::RecordNotFound
+      end
+
+      it "uses the cleanup_discarded_jobs_before_seconds_ago configuration" do
+        allow(described_class.configuration).to receive(:env).and_return ENV.to_hash.merge({ 'GOOD_JOB_CLEANUP_DISCARDED_JOBS_BEFORE_SECONDS_AGO' => 30.days.to_i.to_s })
+        described_class.cleanup_preserved_jobs
+
+        expect { old_discarded_job.reload }.not_to raise_error
+        expect { older_discarded_job.reload }.to raise_error ActiveRecord::RecordNotFound
+      end
+
+      it "keeps every discarded job when cleanup_discarded_jobs? is false" do
+        described_class.cleanup_preserved_jobs(include_discarded: false, discarded_older_than: 30.days)
+
+        expect { older_discarded_job.reload }.not_to raise_error
+        expect { older_discarded_batch.reload }.not_to raise_error
+      end
+
+      it "instruments the discarded retention period" do
+        payloads = []
+        callback = proc { |*args| payloads << args.last }
+
+        ActiveSupport::Notifications.subscribed(callback, "cleanup_preserved_jobs.good_job") do
+          described_class.cleanup_preserved_jobs(discarded_older_than: 30.days)
+        end
+
+        expect(payloads.first).to include(discarded_older_than: 30.days, discarded_timestamp: be_within(1.minute).of(30.days.ago))
+      end
     end
 
     it "does not delete batches until their callbacks have finished" do

@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 module GoodJob
@@ -13,15 +14,17 @@ module GoodJob
     end
 
     def records
-      after_id = params[:after_id]
-      after_at = params[:after_at].present? ? Time.zone.parse(params[:after_at]) : nil
-      limit = params.fetch(:limit, DEFAULT_LIMIT)
+      @_records ||= begin
+        after_id = params[:after_id]
+        after_at = parse_after_at(params[:after_at])
+        limit = params.fetch(:limit, DEFAULT_LIMIT)
 
-      query_for_records.display_all(
-        ordered_by: ordered_by,
-        after_at: after_at,
-        after_id: after_id
-      ).limit(limit)
+        query_for_records.display_all(
+          ordered_by: ordered_by,
+          after_at: after_at,
+          after_id: after_id
+        ).limit(limit)
+      end
     end
 
     def last
@@ -76,7 +79,7 @@ module GoodJob
 
     def next_page_params
       order_column = ordered_by.first
-      last_record = records.last
+      last_record = last
 
       {
         after_at: last_record&.send(order_column)&.iso8601(6),
@@ -85,6 +88,14 @@ module GoodJob
     end
 
     private
+
+    def parse_after_at(value)
+      return unless value.is_a?(String) && value.present?
+
+      Time.zone.parse(value)
+    rescue ArgumentError
+      nil
+    end
 
     def query_for_records
       raise NotImplementedError

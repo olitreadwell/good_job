@@ -1,3 +1,4 @@
+# typed: false
 # frozen_string_literal: true
 
 module GoodJob
@@ -30,6 +31,10 @@ module GoodJob
     #
     # @example
     #   GoodJob::AdvisoryLockable.hash_function = "sha256"
+    # pgcrypto digest() types; "md5", "hashtext", and "uuid_v5" have dedicated branches in +advisory_lock_bigint_sql+.
+    DIGEST_HASH_FUNCTIONS = %w[sha1 sha224 sha256 sha384 sha512].freeze
+    ADVISORY_LOCK_FUNCTION_PATTERN = /\Apg_(try_)?advisory_(xact_)?(un)?lock(_shared)?\z/
+
     class << self
       def hash_function=(value)
         @_hash_function = value
@@ -62,8 +67,22 @@ module GoodJob
     # require additional synchronization.
     #
     # Per-key structure: [session_count, xact_txns, cte]
-    #   xact_txns: Array of WeakRefs to AR transaction objects
+    #   xact_txns: Array of TransactionRefs to AR transaction objects
     class AdvisoryLockCounter
+      # A weak reference to an Active Record transaction. Unlike +WeakRef+,
+      # which uses a class variable, this can be used from non-main Ractors.
+      class TransactionRef
+        def initialize(transaction)
+          @ref = ObjectSpace::WeakMap.new
+          @ref[:transaction] = transaction
+        end
+
+        def open?
+          transaction = @ref[:transaction]
+          !transaction.nil? && transaction.open?
+        end
+      end
+
       def initialize
         if defined?(ObjectSpace::WeakKeyMap)
           # WeakKeyMap (Ruby 3.3+) holds weak keys with strong values:
@@ -144,13 +163,13 @@ module GoodJob
 
       # Record a lock acquisition.
       # Per-key structure: [session_count, xact_txns, cte]
-      #   xact_txns is an Array of WeakRefs to transaction objects
+      #   xact_txns is an Array of TransactionRefs
       def record_lock(conn, key, cte: false, xact: false)
         prune(conn)
         counts = self[conn] || (self[conn] = {})
         session_count, xact_txns, was_cte = counts[key] || [0, [], false]
         if xact
-          xact_txns += [WeakRef.new(conn.current_transaction)]
+          xact_txns += [TransactionRef.new(conn.current_transaction)]
         else
           session_count += 1
         end
@@ -191,11 +210,7 @@ module GoodJob
         return unless counts
 
         counts.each do |key, (session_count, xact_txns, cte)|
-          live_txns = xact_txns.select do |ref|
-            ref.weakref_alive? && ref.open?
-          rescue WeakRef::RefError
-            false
-          end
+          live_txns = xact_txns.select(&:open?)
 
           if session_count.zero? && live_txns.empty?
             counts.delete(key)
@@ -206,7 +221,14 @@ module GoodJob
       end
     end
 
-    ADVISORY_LOCK_COUNTS = AdvisoryLockCounter.new
+    # Lock counts are tracked per connection, and connections are not shared
+    # across Ractors, so each Ractor has its own counter.
+    # @api private
+    # @return [AdvisoryLockCounter]
+    def self.advisory_lock_counts
+      GoodJob::Ractors.local(:good_job_advisory_lock_counts) { AdvisoryLockCounter.new }
+    end
+
     AREL_TABLE_NEW_KWARGS = Arel::Table.instance_method(:initialize).parameters.any? { |type, name| type == :key && name == :name }
 
     included do
@@ -369,7 +391,7 @@ module GoodJob
           cte_type = supports_cte_materialization_specifiers? ? :MATERIALIZED : :""
           composed_cte = Arel::Nodes::As.new(cte_table, Arel::Nodes::UnaryOperation.new(cte_type, cte_query.arel))
 
-          lock_condition = "#{function}(#{advisory_lock_bigint_sql("#{_quoted_table_name_string} || '-' || #{adapter_class.quote_table_name(cte_table.name)}.#{adapter_class.quote_column_name(column)}::text")})"
+          lock_condition = "#{advisory_lock_function_sql(function)}(#{advisory_lock_bigint_sql("#{_quoted_table_name_string} || '-' || #{adapter_class.quote_table_name(cte_table.name)}.#{adapter_class.quote_column_name(column)}::text")})"
           query = cte_table.project(cte_table[:id])
                            .with(composed_cte)
                            .where(defined?(Arel::Nodes::BoundSqlLiteral) ? Arel::Nodes::BoundSqlLiteral.new(lock_condition, [], {}) : Arel::Nodes::SqlLiteral.new(lock_condition))
@@ -397,11 +419,11 @@ module GoodJob
       def advisory_lock_key(key, function: advisory_lockable_function, connection: nil)
         query = if function.include? "_try_"
                   <<~SQL.squish
-                    SELECT #{function}(#{advisory_lock_bigint_sql('$1::text')}) AS locked
+                    SELECT #{advisory_lock_function_sql(function)}(#{advisory_lock_bigint_sql('$1::text')}) AS locked
                   SQL
                 else
                   <<~SQL.squish
-                    SELECT #{function}(#{advisory_lock_bigint_sql('$1::text')})::text AS locked
+                    SELECT #{advisory_lock_function_sql(function)}(#{advisory_lock_bigint_sql('$1::text')})::text AS locked
                   SQL
                 end
 
@@ -446,7 +468,7 @@ module GoodJob
       # @return [Boolean] whether the lock was released.
       def advisory_unlock_key(key, function: advisory_unlockable_function, connection: nil)
         conn = connection || lease_connection
-        session_count, _xact_count, cte = ADVISORY_LOCK_COUNTS.counts_for(conn, key)
+        session_count, _xact_count, cte = AdvisoryLockable.advisory_lock_counts.counts_for(conn, key)
 
         if session_count <= 1 && cte
           advisory_unlock_key!(key, function: function, connection: conn)
@@ -473,7 +495,7 @@ module GoodJob
       # @return [void]
       def advisory_unlock_key!(key, function: advisory_unlockable_function, connection: nil)
         conn = connection || lease_connection
-        _, xact_count, = ADVISORY_LOCK_COUNTS.counts_for(conn, key)
+        _, xact_count, = AdvisoryLockable.advisory_lock_counts.counts_for(conn, key)
 
         if xact_count.positive?
           # An active xact lock on the same key means owns_advisory_lock_key? will
@@ -505,7 +527,7 @@ module GoodJob
         raise ArgumentError, "No unlock function provided" if function.blank?
 
         query = <<~SQL.squish
-          SELECT #{function}(#{advisory_lock_bigint_sql('$1::text')}) AS unlocked
+          SELECT #{advisory_lock_function_sql(function)}(#{advisory_lock_bigint_sql('$1::text')}) AS unlocked
         SQL
         binds = [
           ActiveRecord::Relation::QueryAttribute.new('key', key, ActiveRecord::Type::String.new),
@@ -591,8 +613,21 @@ module GoodJob
           "('x' || substr(replace(uuid_generate_v5('6ba7b810-9dad-11d1-80b4-00c04fd430c8'::uuid, (#{value_sql})::text)::text, '-', ''), 1, 16))::bit(64)::bigint"
         else
           # pgcrypto's digest() supports sha1, sha224, sha256, sha384, sha512
-          "('x' || substr(encode(digest((#{value_sql})::text, '#{GoodJob::AdvisoryLockable.hash_function}'), 'hex'), 1, 16))::bit(64)::bigint"
+          digest_type = GoodJob::AdvisoryLockable.hash_function.to_s.downcase
+          raise ArgumentError, "Unsupported advisory lock hash function: #{digest_type.inspect}" unless DIGEST_HASH_FUNCTIONS.include?(digest_type)
+
+          "('x' || substr(encode(digest((#{value_sql})::text, '#{digest_type}'), 'hex'), 1, 16))::bit(64)::bigint"
         end
+      end
+
+      # Validates a Postgres advisory lock function name before it is interpolated into SQL.
+      # @param function [String, Symbol]
+      # @return [String]
+      def advisory_lock_function_sql(function)
+        function = function.to_s
+        raise ArgumentError, "Unsupported advisory lock function: #{function.inspect}" unless ADVISORY_LOCK_FUNCTION_PATTERN.match?(function)
+
+        function
       end
 
       # Extracts the upper 32 bits of the advisory lock bigint, used as +classid+ in pg_locks.
@@ -616,15 +651,15 @@ module GoodJob
       end
 
       def record_advisory_lock(conn, key, cte: false, xact: false)
-        ADVISORY_LOCK_COUNTS.record_lock(conn, key, cte: cte, xact: xact)
+        AdvisoryLockable.advisory_lock_counts.record_lock(conn, key, cte: cte, xact: xact)
       end
 
       def record_advisory_unlock(conn, key)
-        ADVISORY_LOCK_COUNTS.record_unlock(conn, key)
+        AdvisoryLockable.advisory_lock_counts.record_unlock(conn, key)
       end
 
       def prune_advisory_locks(conn)
-        ADVISORY_LOCK_COUNTS.prune(conn)
+        AdvisoryLockable.advisory_lock_counts.prune(conn)
       end
 
       # Postgres advisory unlocking function for the class
@@ -642,7 +677,7 @@ module GoodJob
       # @return [void]
       def advisory_unlock_session(connection: nil)
         conn = connection || lease_connection
-        ADVISORY_LOCK_COUNTS.clear_session_locks(conn)
+        AdvisoryLockable.advisory_lock_counts.clear_session_locks(conn)
         conn.exec_query("SELECT pg_advisory_unlock_all()::text AS unlocked", 'GoodJob::Lockable Unlock Session').first[:unlocked]
       end
 
@@ -733,6 +768,18 @@ module GoodJob
     # @return [Boolean]
     def owns_advisory_lock?(key: lockable_key)
       self.class.owns_advisory_lock_key?(key)
+    end
+
+    # Tests whether +connection+ currently holds the advisory lock for this record.
+    # Checks both that the connection is still active and that the local bookkeeping
+    # records a lock acquired on it. Does not query the database.
+    # @param connection [ActiveRecord::ConnectionAdapters::AbstractAdapter, nil]
+    # @param key [String, Symbol] Advisory lock key to check
+    # @return [Boolean]
+    def advisory_lock_active_on?(connection, key: lockable_key)
+      return false unless connection&.active?
+
+      AdvisoryLockable.advisory_lock_counts.counts_for(connection, key).first.positive?
     end
 
     # Releases all advisory locks on the record that are held by the current

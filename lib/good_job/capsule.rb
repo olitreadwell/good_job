@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 module GoodJob
@@ -5,11 +6,7 @@ module GoodJob
   # a {GoodJob::Scheduler}, {GoodJob::Poller}, {GoodJob::Notifier}, and {GoodJob::CronManager}.
   # GoodJob creates a default capsule on initialization.
   class Capsule
-    # @!attribute [r] instances
-    #   @!scope class
-    #   List of all instantiated Capsules in the current process.
-    #   @return [Array<GoodJob::Capsule>, nil]
-    cattr_reader :instances, default: Concurrent::Array.new, instance_reader: false
+    include InstanceRegistry
 
     delegate :register, :renew, :unregister, :id_for_lock, to: :@tracker, prefix: :_tracker
 
@@ -26,7 +23,7 @@ module GoodJob
       @tracker = GoodJob::CapsuleTracker.new(executor: @shared_executor)
       @lower_thread_priority = nil
 
-      self.class.instances << self
+      register_instance
     end
 
     # Start the capsule once. After a shutdown, {#restart} must be used to start again.
@@ -37,6 +34,8 @@ module GoodJob
       @mutex.synchronize do
         return unless startable?(force: force)
 
+        register_instance
+
         @notifier = GoodJob::Notifier.new(enable_listening: configuration.enable_listen_notify, capsule: self, executor: @shared_executor)
         @poller = GoodJob::Poller.new(poll_interval: configuration.poll_interval)
         @multi_scheduler = GoodJob::MultiScheduler.from_configuration(configuration, capsule: self, warm_cache_on_initialize: true).tap do |multischeduler|
@@ -45,7 +44,7 @@ module GoodJob
         @notifier.recipients.push([@multi_scheduler, :create_thread])
         @poller.recipients.push(-> { @multi_scheduler.create_thread({ fanout: true }) })
 
-        @cron_manager = GoodJob::CronManager.new(configuration.cron_entries, start_on_initialize: true, executor: @shared_executor) if configuration.enable_cron?
+        @cron_manager = GoodJob::CronManager.new(configuration.cron_entries, start_on_initialize: true, graceful_restart_period: configuration.cron_graceful_restart_period, executor: @shared_executor) if configuration.enable_cron?
         @startable = false
         @started_at = Time.current
       end
@@ -71,7 +70,10 @@ module GoodJob
     def restart(timeout: NONE)
       raise ArgumentError, "Capsule#restart cannot be called with a timeout of nil" if timeout.nil?
 
+      replaced_instances = [@notifier, @poller, @cron_manager, *@multi_scheduler&.schedulers].compact
       shutdown(timeout: timeout)
+      # Start creates new components, so unregister the replaced ones to let them be garbage collected
+      replaced_instances.each { |instance| instance.class.prune(instance) }
       start(force: true)
     end
 
@@ -116,11 +118,13 @@ module GoodJob
       @multi_scheduler&.lower_thread_priority = value
     end
 
-    private
-
+    # Configuration for this capsule, falling back to the global configuration.
+    # @return [GoodJob::Configuration]
     def configuration
       @configuration || GoodJob.configuration
     end
+
+    private
 
     def startable?(force: false)
       !@started_at && (@startable || force)

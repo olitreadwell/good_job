@@ -1,3 +1,4 @@
+# typed: true
 # frozen_string_literal: true
 
 module GoodJob
@@ -7,7 +8,9 @@ module GoodJob
     end
 
     def show
-      @batch = GoodJob::BatchRecord.find(params[:id])
+      batches = GoodJob::BatchRecord.all
+      batches = batches.preload(jobs: :concurrency_claims, callback_jobs: :concurrency_claims) if GoodJob::ConcurrencyClaim.table_exists?
+      @batch = batches.find(params[:id])
     end
 
     def retry

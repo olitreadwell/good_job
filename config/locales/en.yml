@@ -49,6 +49,11 @@ en:
         last_7_days: Last 7 days
         title: Discard Cleaner
         total: Total
+    concurrency_claims:
+      states:
+        granted: Granted
+        promoted: Promoted
+        waiting: Waiting
     cron_entries:
       actions:
         confirm_disable: Are you sure you want to disable this cron entry?
@@ -199,6 +204,7 @@ en:
       job:
         arguments: Arguments
         attempts: Attempts
+        concurrency_claims: Concurrency claims
         labels: Labels
         priority: Priority
         queue: Queue
@@ -234,15 +240,28 @@ en:
         value: Value
     performance:
       index:
-        average_duration: Average duration
-        chart_title: Total job execution time in seconds
+        chart_title: Total execution latency in seconds
+        chart_title_queue: Average queue latency in seconds
+        chart_title_total: Average total latency in seconds
+        execution_latency: Execution latency
         executions: Executions
         job_class: Job class
-        maximum_duration: Maximum duration
-        minimum_duration: Minimum duration
+        jobs: Jobs
         no_executions: No executions in this time range.
+        queue_latency: Queue latency
         queue_name: Queue name
         title: Performance
+        total_latency: Total latency
+      latency:
+        average: avg
+        maximum: max
+        minimum: min
+      metric:
+        chart_metric: Chart metric
+        metric_options:
+          execution: Execution latency
+          queue: Queue latency
+          total: Total latency
       range:
         bucket_size:
           days: "%{count}d"
@@ -267,8 +286,11 @@ en:
         time_range: Performance time range
         time_zone: 'Time zone:'
       show:
+        execution_chart_title: Execution latency
+        queue_chart_title: Queue latency
         slow: Slow
         title: Performance
+        total_chart_title: Total latency
     processes:
       index:
         cron_enabled: Cron enabled

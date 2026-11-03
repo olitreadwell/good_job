@@ -88,6 +88,11 @@
   min-width: 14rem;
 }
 
+/* Grid cells default to min-width:auto, so a wide header label would grow its column instead of wrapping. */
+.performance-row > * {
+  min-width: 0;
+}
+
 .performance-name {
   overflow-wrap: anywhere;
   white-space: normal;
@@ -141,6 +146,12 @@
   width: 1rem;
 }
 
+.svg-icon.badge-icon {
+  height: 1em;
+  width: 1em;
+  vertical-align: top;
+}
+
 .badge-group {
   position: relative;
   display: inline-flex;
@@ -174,4 +185,9 @@
 .badge-group.rounded-pill > .badge:not(.d-none) + .badge:not(.d-none) {
   border-top-left-radius: 0 !important;
   border-bottom-left-radius: 0 !important;
+}
+
+/* Stop a long job name from widening its cell, so label badges clip at the column edge. */
+.min-width-0 {
+  min-width: 0;
 }
